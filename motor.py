@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Motor de Asignación Académica - Módulo de Cómputo Central (Optimizado para UDS 201)
+Motor de Asignación Académica - Módulo de Cómputo Central (Con Reporte de Eficiencia)
 """
 
 import pandas as pd
@@ -128,7 +128,7 @@ def ejecutar_asignacion_global(
 
     carreras_ing = {"ICA","ICC","ICE","ICI","ING","INM","IOC"}
     carreras_adm = {"ADM","DEM","DER","EAD","EAI","EAM","ECN","MAD"}
-    carreras_salud = {"KIN", "MED", "ENF", "NUT", "ODON"}  # Conjunto de Salud establecido
+    carreras_salud = {"KIN", "MED", "ENF", "NUT", "ODON"}
 
     def belongs_to_group(carrera, destino):
         if destino == "TODOS": return True
@@ -212,7 +212,8 @@ def ejecutar_asignacion_global(
         capacidad = sala["CAPACIDAD"]
         carrera = curso["CARRERA"]
         ratio = alumnos / capacidad
-        score = ratio * 200
+        
+        score = ratio * 600
 
         if sala["EDIFICIO"] in edificios_preferidos(carrera):
             score += 300
@@ -240,13 +241,15 @@ def ejecutar_asignacion_global(
                     return False, "Conflicto horario detectado"
         return True, "Disponible"
 
+    # 📊 Inicializamos las columnas de resultados
     base["SALA"] = ""
     base["EDIFICIO"] = ""
+    base["EFICIENCIA"] = ""  # Nueva columna en la base de cursos
     base["ESTADO"] = "PENDIENTE"
     base["MOTIVO_RECHAZO"] = ""
 
     niveles_fase = [1, 2, 3, 4, 5]
-    niveles_eficiencia = [1]
+    umbrales_eficiencia = [0.75, 0.50, 0.25, 0.0]
 
     postgrado_idx = base[base["POSTGRADO_FLAG"] == True].index.tolist()
     pregrado_idx = base[base["POSTGRADO_FLAG"] == False].index.tolist()
@@ -255,10 +258,10 @@ def ejecutar_asignacion_global(
         no_asignados = indices_subconjunto.copy()
 
         for fase in niveles_fase:
-            for eficiencia in niveles_eficiencia:
+            for umbral in umbrales_eficiencia:
                 removidos = set()
 
-                for idx in no_asignados:
+                for idx in no_assignado := no_asignados:
                     curso = base.loc[idx]
                     carrera = curso["CARRERA"]
                     alumnos = curso["MAX ALUMNOS"]
@@ -288,6 +291,12 @@ def ejecutar_asignacion_global(
                         if alumnos > cap:
                             razon_actual = "Capacidad insuficiente"
                             continue
+
+                        ratio_eficiencia = alumnos / cap
+                        if ratio_eficiencia < umbral:
+                            razon_actual = f"Eficiencia baja para corte del {int(umbral*100)}%"
+                            continue
+
                         if not cumple_restriccion_base(carrera, nombre):
                             razon_actual = "Restricción de carrera"
                             continue
@@ -300,22 +309,18 @@ def ejecutar_asignacion_global(
                             razon_actual = "Conflicto horario"
                             continue
 
-                        # 🔴 Restricción EXCLUSIVA absoluta para SIMU KIN
                         if nombre_norm == "SIMUKINE" and carrera != "KIN":
                             razon_actual = "Sala SIMU KIN exclusiva para KIN"
                             continue
 
-                        # 🔒 REGLAS ESTRICTAS DE SEGURIDAD PARA UDS 201
                         if nombre_norm == "UDS201":
                             es_morfo = any(p in sec for p in ["MORF", "MORFO", "ANAT", "MORFOLOGIA"])
                             es_salud = carrera in carreras_salud
                             
-                            # A) Si es Postgrado, obligatoriamente debe ser clase de Morfología
                             if es_post and not es_morfo:
                                 razon_actual = "UDS 201 reservada en Postgrado solo para clases de Morfología"
                                 continue
                                 
-                            # B) Filtro Radical: Si no es Morfo ni carrera de Salud, se deniega completamente
                             if not (es_morfo or es_salud):
                                 razon_actual = "UDS 201 exclusiva para clases de Morfología o carreras de Salud"
                                 continue
@@ -326,13 +331,12 @@ def ejecutar_asignacion_global(
                         else:
                             score -= 300_000
 
-                        # 🎯 JERARQUÍA DE PUNTAJES DINÁMICOS PARA UDS 201 Y SIMUKINE
                         if nombre_norm == "UDS201":
                             es_morfo = any(p in sec for p in ["MORF", "MORFO", "ANAT", "MORFOLOGIA"])
                             if es_morfo:
-                                score += 10_000_000  # Prioridad Absoluta N°1 (Le gana a postgrados estándar)
+                                score += 10_000_000  
                             else:
-                                score += 500_000     # Prioridad N°2 para carreras de salud comunes
+                                score += 500_000     
 
                         if nombre_norm == "SIMUKINE" and carrera == "KIN":
                             score += 500_000
@@ -345,8 +349,10 @@ def ejecutar_asignacion_global(
                         nombre_sala = mejor_sala.get("SALA_NAME", mejor_sala.get("SALA"))
                         cap_final = mejor_sala["CAPACIDAD"]
                         
+                        # 📊 Guardamos resultados y calculamos eficiencia de la fila
                         base.loc[idx, "SALA"] = nombre_sala
                         base.loc[idx, "EDIFICIO"] = mejor_sala["EDIFICIO"]
+                        base.loc[idx, "EFICIENCIA"] = f"{(alumnos / cap_final * 100):.1f}%"
                         base.loc[idx, "ESTADO"] = f"ASIGNADO F{fase}"
                         
                         ocupar_sala(nombre_sala, dia, inicio, fin, fi, ff, f"{carrera} - {curso['NOMBRE SECCIÓN']}", alumnos, cap_final)
@@ -369,9 +375,14 @@ def ejecutar_asignacion_global(
     base["FECHA INICIO"] = base["FECHA INICIO"].dt.strftime('%Y-%m-%d')
     base["FECHA TERMINO"] = base["FECHA TERMINO"].dt.strftime('%Y-%m-%d')
 
+    # 📊 Construcción de la malla incluyendo la columna de eficiencia al final
     registros = []
     for sala, bloques in ocupacion.items():
         for b in bloques:
+            alums_ocupante = b[6]
+            cap_sala = b[7]
+            pct_eficiencia = (alums_ocupante / cap_sala * 100) if cap_sala > 0 else 0
+            
             registros.append({
                 "SALA": sala,
                 "DIA": b[0],
@@ -380,8 +391,9 @@ def ejecutar_asignacion_global(
                 "FECHA_INICIO": b[3].strftime('%Y-%m-%d') if pd.notnull(b[3]) else "",
                 "FECHA_TERMINO": b[4].strftime('%Y-%m-%d') if pd.notnull(b[4]) else "",
                 "CURSO_OCUPANTE": b[5],
-                "MAX_ALUMNOS": b[6],
-                "CAPACIDAD_SALA": b[7]
+                "MAX_ALUMNOS": alums_ocupante,
+                "CAPACIDAD_SALA": cap_sala,
+                "EFICIENCIA": f"{pct_eficiencia:.1f}%"  # Nueva columna en la malla
             })
             
     df_malla = pd.DataFrame(registros)
