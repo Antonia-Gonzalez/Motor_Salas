@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Motor de Asignación Académica - Módulo de Cómputo Central (Con Reporte de Eficiencia)
+Motor de Asignación Académica - Módulo de Cómputo Central (Versión Corregida)
 """
 
 import pandas as pd
@@ -241,10 +241,9 @@ def ejecutar_asignacion_global(
                     return False, "Conflicto horario detectado"
         return True, "Disponible"
 
-    # 📊 Inicializamos las columnas de resultados
     base["SALA"] = ""
     base["EDIFICIO"] = ""
-    base["EFICIENCIA"] = ""  # Nueva columna en la base de cursos
+    base["EFICIENCIA"] = ""  
     base["ESTADO"] = "PENDIENTE"
     base["MOTIVO_RECHAZO"] = ""
 
@@ -261,7 +260,7 @@ def ejecutar_asignacion_global(
             for umbral in umbrales_eficiencia:
                 removidos = set()
 
-                for idx in no_assignado := no_asignados:
+                for idx in no_asignados:
                     curso = base.loc[idx]
                     carrera = curso["CARRERA"]
                     alumnos = curso["MAX ALUMNOS"]
@@ -349,7 +348,6 @@ def ejecutar_asignacion_global(
                         nombre_sala = mejor_sala.get("SALA_NAME", mejor_sala.get("SALA"))
                         cap_final = mejor_sala["CAPACIDAD"]
                         
-                        # 📊 Guardamos resultados y calculamos eficiencia de la fila
                         base.loc[idx, "SALA"] = nombre_sala
                         base.loc[idx, "EDIFICIO"] = mejor_sala["EDIFICIO"]
                         base.loc[idx, "EFICIENCIA"] = f"{(alumnos / cap_final * 100):.1f}%"
@@ -375,7 +373,6 @@ def ejecutar_asignacion_global(
     base["FECHA INICIO"] = base["FECHA INICIO"].dt.strftime('%Y-%m-%d')
     base["FECHA TERMINO"] = base["FECHA TERMINO"].dt.strftime('%Y-%m-%d')
 
-    # 📊 Construcción de la malla incluyendo la columna de eficiencia al final
     registros = []
     for sala, bloques in ocupacion.items():
         for b in bloques:
@@ -393,7 +390,7 @@ def ejecutar_asignacion_global(
                 "CURSO_OCUPANTE": b[5],
                 "MAX_ALUMNOS": alums_ocupante,
                 "CAPACIDAD_SALA": cap_sala,
-                "EFICIENCIA": f"{pct_eficiencia:.1f}%"  # Nueva columna en la malla
+                "EFICIENCIA": f"{pct_eficiencia:.1f}%"  
             })
             
     df_malla = pd.DataFrame(registros)
