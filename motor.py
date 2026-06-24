@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Motor de Asignación Académica - Infraestructura 100% en Código (Solo lee SALAS de Excel)
+Motor de Asignación Académica - Versión Corregida y Restaurada
 """
 
 import pandas as pd
@@ -81,7 +81,7 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
     salas["SALA"] = salas["SALA"].fillna("").astype(str).str.strip().str.upper()
 
     # =============================================================================
-    # 4. CRITERIOS DE ORDENAMIENTO Y RESTRICCIONES INTERNAS (DEFINIDAS AQUÍ)
+    # 4. CRITERIOS DE ORDENAMIENTO Y RESTRICCIONES INTERNAS
     # =============================================================================
     def prioridad_reunion(row):
         r = row["TIPO DE REUNION"]
@@ -94,22 +94,20 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
     base["PRIORIDAD"] = base.apply(prioridad_reunion, axis=1)
     base = base.sort_values(by=["POSTGRADO_FLAG", "PRIORIDAD", "MAX ALUMNOS"], ascending=[False, True, False]).reset_index(drop=True)
 
-    # 🔹 1. AQUÍ DEFINES LOS GRUPOS DIRECTAMENTE EN PYTHON
+    # 🔹 GRUPOS DIRECTAMENTE EN PYTHON
     grupo_dict = {
         "INGENIERIA": ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"],
         "ADMINISTRACION": ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"],
         "SALUD": ["KIN", "MED", "ENF", "NUT", "ODON"]
     }
 
-    # 🔹 2. AQUÍ DEFINES QUÉ SALAS SON EXCLUSIVAS Y PARA QUÉ CARRERA O GRUPO
-    # (Solo aplica si la sala en la pestaña SALAS tiene 'TIPO RESTRICCION' = 'EXCLUSIVO')
+    # 🔹 SALAS EXCLUSIVAS (Aplica si en Excel 'TIPO RESTRICCION' = 'EXCLUSIVO')
     restricciones_dict = {
-        "LAB-ING1": [{"CARRERA": "INGENIERIA"}], # Usa el grupo de arriba
-        "SALA-MED5": [{"CARRERA": "MED"}],       # Usa la carrera directa
+        "LAB-ING1": [{"CARRERA": "INGENIERIA"}], 
+        "SALA-MED5": [{"CARRERA": "MED"}],       
         "AUDITORIO-A": [{"CARRERA": "TODOS"}]
     }
 
-    # Mapeo del diccionario de salas tradicionales
     salas_dict = {}
     for _, fila in salas.iterrows():
         s_nombre = str(fila["SALA"]).strip().upper()
@@ -130,6 +128,39 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
     carreras_ing = set(grupo_dict["INGENIERIA"])
     carreras_adm = set(grupo_dict["ADMINISTRACION"])
 
+    # 🛠️ FUNCIONES AUXILIARES RESTAURADAS (Evitan el NameError)
+    def edificios_preferidos(carrera):
+        if carrera in carreras_ing: return ["ING", "CIEN", "REL", "BIB", "HUM"]
+        if carrera in carreras_adm: return ["REL", "BIB", "CIEN", "HUM", "ING"]
+        return ["CIEN", "REL", "BIB", "CEN", "HUM", "ING"]
+
+    def edificios_por_fase(carrera, fase):
+        base_ed = edificios_preferidos(carrera)
+        if fase == 1: return base_ed
+        return list(set(base_ed + ["CEN", "HUM", "BIB", "REL", "CIEN", "ING"]))
+
+    def sala_compatible_fase(curso, sala, fase):
+        nombre_sala = str(sala["SALA"]).upper()
+        if nombre_sala in ["DOCT", "DOCTII"]: return True
+
+        carrera = curso["CARRERA"]
+        reunion = curso["TIPO DE REUNION"]
+        tipo_sala = sala["TIPO DE SALA"]
+        formato = sala["FORMATO"]
+        is_post = curso["POSTGRADO_FLAG"]
+
+        if fase in [1, 2]:
+            if is_post:
+                if reunion == "HIBR" and not (tipo_sala == "HYFLEX" or formato == "AUDITORIO"): return False
+                if reunion == "CLAS" and not (tipo_sala == "STREAMING" or sala["EDIFICIO"] == "REL"): return False
+                if reunion in ["EXAM", "PRBA"] and not (formato == "PLANA" or tipo_sala == "STREAMING"): return False
+                if reunion == "AYUD" and not (tipo_sala == "SALA NORMAL"): return False
+            else:
+                if reunion == "CLAS" and not (tipo_sala in ["STREAMING", "SALA NORMAL"]): return False
+                if reunion in ["EXAM", "PRBA"] and not (formato == "PLANA" or tipo_sala == "STREAMING"): return False
+                if reunion == "AYUD" and not (tipo_sala == "SALA NORMAL"): return False
+        return True
+
     def belongs_to_group(carrera, destino):
         if destino == "TODOS": return True
         if destino == "POSTGRADO": return len(carrera) == 4 and carrera != "BACH"
@@ -144,7 +175,7 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
             return any(belongs_to_group(carrera, r["CARRERA"]) for r in rules)
         return True
 
-# =============================================================================
+    # =============================================================================
     # 5. CORE ENGINE: PROCESAMIENTO Y RESOLUCIÓN DE COLISIONES
     # =============================================================================
     ocupacion = {}  
@@ -252,8 +283,6 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
     # =============================================================================
     # 6. CONSTRUCCIÓN DE REPORTES FINALES (FORMATEO DE FECHAS DD-MM-AAAA)
     # =============================================================================
-    
-    # 🔹 Formateo limpio de fechas a formato DD-MM-AAAA en el dataframe de cursos
     base["INICIO"] = base["INICIO"].dt.strftime('%d-%m-%Y')
     base["FIN"] = base["FIN"].dt.strftime('%d-%m-%Y')
 
@@ -267,7 +296,6 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
     columnas_entrega = [col for col in columnas_finales if col in base.columns]
     base_entrega = base[columnas_entrega].copy()
 
-    # Reporte 2: Malla de Ocupación con fechas homologadas en DD-MM-AAAA
     registros_malla = []
     for sala, bloques in ocupacion.items():
         for b in bloques:
@@ -278,8 +306,8 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
                 "SALA": sala,
                 "DIA": b[0],
                 "HORARIO": f"{b[1].strftime('%H:%M')} - {b[2].strftime('%H:%M')}",
-                "INICIO": b[3].strftime('%d-%m-%Y'), # 🔹 DD-MM-AAAA aquí también
-                "FIN": b[4].strftime('%d-%m-%Y'),    # 🔹 DD-MM-AAAA aquí también
+                "INICIO": b[3].strftime('%d-%m-%Y'), 
+                "FIN": b[4].strftime('%d-%m-%Y'),    
                 "CURSO_OCUPANTE": b[5],
                 "CUPOS_ALUMNOS": alums,
                 "CAPACIDAD SALA": cap,
