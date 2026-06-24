@@ -77,10 +77,10 @@ def ejecutar_asignacion_global(
 
     # OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
     for edificio in salas_por_edificio:
-        text = salas_por_edificio[edificio] = sorted(
-            salas_por_edificio[edificio],
-            key=lambda x: x["CAPACIDAD"]
-        )
+    salas_por_edificio[edificio] = sorted(
+        salas_por_edificio[edificio],
+        key=lambda x: x["CAPACIDAD"]
+    )
 
 
     # =============================================================================
@@ -216,7 +216,7 @@ def ejecutar_asignacion_global(
 
     # 🔄 Propagar asignaciones manuales a todos los miembros de la misma lista cruzada
     sala_manual_por_grupo = base[base["SALA"] != ""].groupby("GRUPO_ID")["SALA"].first()
-    if not sala_manual_per_group.empty:
+    if not sala_manual_por_group.empty:
         base["SALA"] = base["GRUPO_ID"].map(sala_manual_por_grupo).fillna(base["SALA"])
 
     # Diccionarios de reglas de negocio heredados
@@ -446,15 +446,13 @@ def ejecutar_asignacion_global(
                         )
                         removidos.add(idx)
                     else:
-                        # 🌟 Si falla, marcamos como "SIN SALA" a todos los elementos pendientes de este grupo
-                        indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index.tolist()
-                        for g_idx in indices_mismo_grupo:
-                            if base.loc[g_idx, "ESTADO"] == "PENDIENTE":
-                                base.loc[g_idx, "ESTADO"] = "SIN SALA"
-                                if len(motivos) > 0:
-                                    base.loc[g_idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
-                                else:
-                                    base.loc[g_idx, "MOTIVO_RECHAZO"] = "No se encontró sala compatible"
+    # Guardamos temporalmente el último motivo observado,
+    # pero NO marcamos SIN SALA todavía.
+                        if len(motivos) > 0:
+                            indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index
+
+                            for g_idx in indices_mismo_grupo:
+                                base.loc[g_idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
@@ -467,6 +465,28 @@ def ejecutar_asignacion_global(
 
     procesar_bloques(postgrado_idx, True)
     procesar_bloques(pregrado_idx, False)
+# =============================================================================
+# MARCAR COMO SIN SALA SOLO AL FINAL DEL PROCESO
+# =============================================================================
+
+    for gid in base["GRUPO_ID"].unique():
+    
+        filas_grupo = base[base["GRUPO_ID"] == gid]
+    
+        if (filas_grupo["ESTADO"] == "PENDIENTE").all():
+    
+            ultimo_motivo = ""
+            motivos_validos = filas_grupo[
+                filas_grupo["MOTIVO_RECHAZO"].str.strip() != ""
+            ]["MOTIVO_RECHAZO"]
+    
+            if len(motivos_validos) > 0:
+                ultimo_motivo = motivos_validos.iloc[0]
+            else:
+                ultimo_motivo = "No se encontró sala compatible"
+    
+            base.loc[filas_grupo.index, "ESTADO"] = "SIN SALA"
+            base.loc[filas_grupo.index, "MOTIVO_RECHAZO"] = ultimo_motivo
 
 
     # =============================================================================
