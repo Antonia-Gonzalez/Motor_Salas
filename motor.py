@@ -160,7 +160,6 @@ def ejecutar_asignacion_global(
     # =============================================================================
     # 4. CRITERIOS DE FILTRADO UI, ORDENAMIENTO Y RESTRICCIONES
     # =============================================================================
-    # Aplicar filtros multiselección de la UI a los cursos normalizados
     if lista_carreras is not None:
         base = base[base["CARRERA"].isin(lista_carreras)]
     if lista_reuniones is not None:
@@ -186,7 +185,6 @@ def ejecutar_asignacion_global(
     base["ESTADO"] = "PENDIENTE"
     base["MOTIVO_RECHAZO"] = ""
     
-    # Asegurar limpieza del nombre de la sala (Sin mapeos o traducciones manuales)
     if "SALA" not in base.columns:
         base["SALA"] = ""
     else:
@@ -212,7 +210,7 @@ def ejecutar_asignacion_global(
     # =============================================================================
     # 🔒 FASE 0: PROCESAR PETICIONES ESPECIALES (PRE-RESERVAS / BLOQUEOS)
     # =============================================================================
-    ocupacion = {}  # Matriz / Diccionario de colisiones horarias
+    ocupacion = {}  
 
     cursos_preasignados = base[base["SALA"] != ""]
 
@@ -233,23 +231,21 @@ def ejecutar_asignacion_global(
             
             base.loc[idx, "CAPACIDAD SALA"] = cap_sala
             base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos / cap_sala * 100):.1f}%"
-            base.loc[idx, "ESTADO"] = "ASIGNACIÓN ESPECIAL"
+            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL"  # 🌟 Cambio clave aquí
             base.loc[idx, "MOTIVO_RECHAZO"] = "Respetado por petición especial de la escuela"
             
             ocupacion.setdefault(sala_fija, []).append(
                 (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
             )
         else:
-            # 🛡️ [SOLUCIÓN LABS / CASOS EXCEPCIONALES] Si la sala NO existe en infraestructura (ej: 'L.COMP-01')
-            # En lugar de fallar, la dejamos pasar como asignación especial sin tocar el maestro oficial
-            cap_sala = alumnos  # Asumimos capacidad adaptativa al tamaño del curso
+            # 🛡️ [CASOS EXCEPCIONALES] Si la sala NO existe en infraestructura (ej: 'L.COMP-01')
+            cap_sala = alumnos  
             
             base.loc[idx, "CAPACIDAD SALA"] = cap_sala
             base.loc[idx, "% OCUPACION SALA"] = "100.0% (Excepcional)"
-            base.loc[idx, "ESTADO"] = "ASIGNACIÓN ESPECIAL"
+            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL (EXCEPCIONAL)"  # 🌟 Cambio clave aquí
             base.loc[idx, "MOTIVO_RECHAZO"] = "Sala fuera de maestro (Caso Excepcional)"
             
-            # La registramos en la matriz horaria para que ningún curso automático intente colisionar en esa misma string de sala
             ocupacion.setdefault(sala_fija, []).append(
                 (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
             )
