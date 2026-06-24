@@ -14,8 +14,8 @@ def ejecutar_asignacion_global(
     lista_salas=None
 ):
     """
-    Motor de asignación jerárquica con Fase 0 de Pre-reserva/Bloqueo de salas
-    y filtros activos desde la UI de Streamlit.
+    Motor de asignación jerárquica con Fase 0 de Pre-reserva/Bloqueo de salas,
+    filtros activos desde la UI de Streamlit y soporte avanzado para LISTAS CRUZADAS.
     """
     ruta_infraestructura = "infraestructura_constante.xlsx"
     
@@ -77,7 +77,7 @@ def ejecutar_asignacion_global(
 
     # OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
     for edificio in salas_por_edificio:
-        salas_por_edificio[edificio] = sorted(
+        text = salas_por_edificio[edificio] = sorted(
             salas_por_edificio[edificio],
             key=lambda x: x["CAPACIDAD"]
         )
@@ -156,6 +156,30 @@ def ejecutar_asignacion_global(
 
     base = pd.DataFrame(filas_normalizadas)
 
+    # 🔗 [LÓGICA LISTAS CRUZADAS] Identificación y Consolidación de Grupos Fucionados
+    if "LISTA CRUZADA" in base.columns:
+        base["LISTA CRUZADA"] = base["LISTA CRUZADA"].fillna("").astype(str).str.strip().str.upper()
+    else:
+        base["LISTA CRUZADA"] = ""
+
+    # Generamos un ID de grupo por defecto (cada fila es su propio grupo)
+    base["GRUPO_ID"] = base.index.astype(str)
+    mask_cruzada = base["LISTA CRUZADA"] != ""
+
+    if mask_cruzada.any():
+        # Agrupamos por código de lista cruzada, día, horario y vigencia de fechas
+        base.loc[mask_cruzada, "GRUPO_ID"] = (
+            "CRUZ_" + 
+            base.loc[mask_cruzada, "LISTA CRUZADA"] + "_" +
+            base.loc[mask_cruzada, "DIA"] + "_" +
+            base.loc[mask_cruzada, "HORARIO"] + "_" +
+            base.loc[mask_cruzada, "FECHA INICIO"].dt.strftime('%Y%m%d') + "_" +
+            base.loc[mask_cruzada, "FECHA TERMINO"].dt.strftime('%Y%m%d')
+        )
+    
+    # Calculamos la suma de cupos combinados por grupo
+    base["CUPOS_CONSOLIDADOS"] = base.groupby("GRUPO_ID")["MAX ALUMNOS"].transform("sum")
+
 
     # =============================================================================
     # 4. CRITERIOS DE FILTRADO UI, ORDENAMIENTO Y RESTRICCIONES
@@ -190,6 +214,11 @@ def ejecutar_asignacion_global(
     else:
         base["SALA"] = base["SALA"].fillna("").astype(str).str.strip().str.upper()
 
+    # 🔄 Propagar asignaciones manuales a todos los miembros de la misma lista cruzada
+    sala_manual_por_grupo = base[base["SALA"] != ""].groupby("GRUPO_ID")["SALA"].first()
+    if not sala_manual_per_group.empty:
+        base["SALA"] = base["GRUPO_ID"].map(sala_manual_por_grupo).fillna(base["SALA"])
+
     # Diccionarios de reglas de negocio heredados
     grupo_dict = {
         "INGENIERIA": ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"],
@@ -213,6 +242,7 @@ def ejecutar_asignacion_global(
     ocupacion = {}  
 
     cursos_preasignados = base[base["SALA"] != ""]
+    grupos_procesados_fase0 = set()
 
     for idx, curso in cursos_preasignados.iterrows():
         sala_fija = curso["SALA"]
@@ -221,34 +251,44 @@ def ejecutar_asignacion_global(
         hf = curso["HORA TERMINO"]
         fi = curso["FECHA INICIO"]
         ff = curso["FECHA TERMINO"]
-        alumnos = curso["MAX ALUMNOS"]
+        alumnos_total = int(curso["CUPOS_CONSOLIDADOS"]) # 🌟 Usamos el cupo total del grupo fusionado
         carrera = curso["CARRERA"]
         sec = str(curso["NOMBRE SECCIÓN"]).upper()
+        gid = curso["GRUPO_ID"]
+
+        # Formatear nombre en la malla horaria final
+        if gid.startswith("CRUZ_"):
+            nombre_ocupante = f"LISTA CRUZADA: {curso['LISTA CRUZADA']}"
+        else:
+            nombre_ocupante = f"{carrera} - {sec}"
 
         if sala_fija in salas_dict_global:
-            # Caso Estándar: La sala manual existe en la infraestructura constante
             cap_sala = salas_dict_global[sala_fija]["CAPACIDAD"]
             
             base.loc[idx, "CAPACIDAD SALA"] = cap_sala
-            base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos / cap_sala * 100):.1f}%"
-            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL"  # 🌟 Cambio clave aquí
+            base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos_total / cap_sala * 100):.1f}%"
+            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL"  
             base.loc[idx, "MOTIVO_RECHAZO"] = "Respetado por petición especial de la escuela"
             
-            ocupacion.setdefault(sala_fija, []).append(
-                (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
-            )
+            # Evitar duplicar el bloqueo en el diccionario de ocupación
+            if gid not in grupos_procesados_fase0:
+                ocupacion.setdefault(sala_fija, []).append(
+                    (dia_fijo, hi, hf, fi, ff, nombre_ocupante, alumnos_total, cap_sala)
+                )
+                grupos_procesados_fase0.add(gid)
         else:
-            # 🛡️ [CASOS EXCEPCIONALES] Si la sala NO existe en infraestructura (ej: 'L.COMP-01')
-            cap_sala = alumnos  
+            cap_sala = alumnos_total  
             
             base.loc[idx, "CAPACIDAD SALA"] = cap_sala
             base.loc[idx, "% OCUPACION SALA"] = "100.0% (Excepcional)"
-            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL (EXCEPCIONAL)"  # 🌟 Cambio clave aquí
+            base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL (EXCEPCIONAL)"  
             base.loc[idx, "MOTIVO_RECHAZO"] = "Sala fuera de maestro (Caso Excepcional)"
             
-            ocupacion.setdefault(sala_fija, []).append(
-                (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
-            )
+            if gid not in grupos_procesados_fase0:
+                ocupacion.setdefault(sala_fija, []).append(
+                    (dia_fijo, hi, hf, fi, ff, nombre_ocupante, alumnos_total, cap_sala)
+                )
+                grupos_procesados_fase0.add(gid)
 
 
     # =============================================================================
@@ -326,15 +366,21 @@ def ejecutar_asignacion_global(
                 removidos = set()
 
                 for idx in no_asignados:
+                    # Si ya fue asignado previamente (por ejemplo, a través de otro miembro del grupo)
+                    if base.loc[idx, "ESTADO"] != "PENDIENTE":
+                        removidos.add(idx)
+                        continue
+
                     curso = base.loc[idx]
                     carrera = curso["CARRERA"]
-                    alumnos = curso["MAX ALUMNOS"]
+                    alumnos_grupo = int(curso["CUPOS_CONSOLIDADOS"]) # 🌟 Evaluamos con el total consolidado
                     dia = curso["DIAS_STD"]
                     inicio = curso["HORA INICIO"]
                     fin = curso["HORA TERMINO"]
                     fi = curso["FECHA INICIO"]
                     ff = curso["FECHA TERMINO"]
                     sec = str(curso["NOMBRE SECCIÓN"]).upper()
+                    gid = curso["GRUPO_ID"]
 
                     edificios = edificios_por_fase(carrera, fase)
                     salas_candidatas = [sala for e in edificios for sala in salas_por_edificio.get(e, [])]
@@ -347,11 +393,11 @@ def ejecutar_asignacion_global(
                         nombre = sala["SALA"]
                         cap = sala["CAPACIDAD"]
 
-                        if alumnos > cap:
+                        if alumnos_grupo > cap:
                             motivos.add("Capacidad insuficiente")
                             continue
 
-                        ratio = alumnos / cap
+                        ratio = alumnos_grupo / cap
                         if ratio < umbral:
                             motivos.add(f"Eficiencia menor al {int(umbral*100)}%")
                             continue
@@ -380,28 +426,44 @@ def ejecutar_asignacion_global(
                         nombre_sala = mejor_sala["SALA"]
                         cap_final = mejor_sala["CAPACIDAD"]
                         
-                        base.loc[idx, "SALA"] = nombre_sala
-                        base.loc[idx, "CAPACIDAD SALA"] = cap_final
-                        base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos / cap_final * 100):.1f}%"
-                        base.loc[idx, "ESTADO"] = f"ASIGNADO F{fase}"
-                        base.loc[idx, "MOTIVO_RECHAZO"] = ""
+                        # 🌟 ASIGNACIÓN EN BLOQUE: Buscamos todas las filas del mismo grupo y les escribimos la misma sala
+                        indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index.tolist()
                         
+                        for g_idx in indices_mismo_grupo:
+                            base.loc[g_idx, "SALA"] = nombre_sala
+                            base.loc[g_idx, "CAPACIDAD SALA"] = cap_final
+                            base.loc[g_idx, "% OCUPACION SALA"] = f"{(alumnos_grupo / cap_final * 100):.1f}%"
+                            base.loc[g_idx, "ESTADO"] = f"ASIGNADO F{fase}"
+                            base.loc[g_idx, "MOTIVO_RECHAZO"] = ""
+                        
+                        if gid.startswith("CRUZ_"):
+                            nombre_ocupante = f"LISTA CRUZADA: {curso['LISTA CRUZADA']}"
+                        else:
+                            nombre_ocupante = f"{carrera} - {sec}"
+
                         ocupacion.setdefault(nombre_sala, []).append(
-                            (dia, inicio, fin, fi, ff, f"{carrera} - {sec}", alumnos, cap_final)
+                            (dia, inicio, fin, fi, ff, nombre_ocupante, alumnos_grupo, cap_final)
                         )
                         removidos.add(idx)
                     else:
-                        if base.loc[idx, "ESTADO"] == "PENDIENTE":
-                            base.loc[idx, "ESTADO"] = "SIN SALA"
-                            if len(motivos) > 0:
-                                base.loc[idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
-                            else:
-                                base.loc[idx, "MOTIVO_RECHAZO"] = "No se encontró sala compatible"
+                        # 🌟 Si falla, marcamos como "SIN SALA" a todos los elementos pendientes de este grupo
+                        indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index.tolist()
+                        for g_idx in indices_mismo_grupo:
+                            if base.loc[g_idx, "ESTADO"] == "PENDIENTE":
+                                base.loc[g_idx, "ESTADO"] = "SIN SALA"
+                                if len(motivos) > 0:
+                                    base.loc[g_idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
+                                else:
+                                    base.loc[g_idx, "MOTIVO_RECHAZO"] = "No se encontró sala compatible"
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
-    postgrado_idx = base[(base["POSTGRADO_FLAG"] == True) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
-    pregrado_idx = base[(base["POSTGRADO_FLAG"] == False) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
+    # 🌟 EXTRAEMOS REPRESENTANTES ÚNICOS: Un solo índice por grupo para evitar evaluar duplicados
+    base_pendientes = base[base["ESTADO"] == "PENDIENTE"]
+    df_representantes = base_pendientes.drop_duplicates(subset=["GRUPO_ID"], keep="first")
+
+    postgrado_idx = df_representantes[df_representantes["POSTGRADO_FLAG"] == True].index.tolist()
+    pregrado_idx = df_representantes[df_representantes["POSTGRADO_FLAG"] == False].index.tolist()
 
     procesar_bloques(postgrado_idx, True)
     procesar_bloques(pregrado_idx, False)
@@ -443,6 +505,6 @@ def ejecutar_asignacion_global(
             
     df_malla = pd.DataFrame(registros_malla)
     if not df_malla.empty:
-        df_malla = df_malla.sort_values(by=["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
+        df_malla = df_malla.sort_values(by =["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
 
     return base_entrega, df_malla
