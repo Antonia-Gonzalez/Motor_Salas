@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import io
@@ -20,15 +21,21 @@ if archivo:
     # 🔍 LECTURA DINÁMICA DE OPCIONES PARA LOS FILTROS
     # =============================================================================
     try:
-        df_base_previa = pd.read_excel(archivo, sheet_name="BASE")
-        df_salas_previa = pd.read_excel(archivo, sheet_name="SALAS")
+        # 1. Leer y concatenar las nuevas hojas de cursos del archivo subido
+        df_pre_previa = pd.read_excel(archivo, sheet_name="BASE PREGRADO")
+        df_post_previa = pd.read_excel(archivo, sheet_name="BASE POSTGRADO")
+        df_base_previa = pd.concat([df_pre_previa, df_post_previa], ignore_index=True)
         
-        carreras_disponibles = sorted(df_base_previa["CARRERA"].dropna().astype(str).str.strip().str.upper().unique())
+        # 2. Leer las salas desde el archivo maestro constante
+        df_salas_previa = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
+        
+        # 3. Extraer opciones usando los nombres reales de las columnas del Excel original
+        carreras_disponibles = sorted(df_base_previa["MATERIA"].dropna().astype(str).str.strip().str.upper().unique())
         edificios_disponibles = sorted(df_salas_previa["EDIFICIO"].dropna().astype(str).str.strip().str.upper().unique())
         tipos_disponibles = sorted(df_salas_previa["TIPO DE SALA"].dropna().astype(str).str.strip().str.upper().unique())
         formatos_disponibles = sorted(df_salas_previa["FORMATO"].dropna().astype(str).str.strip().str.upper().unique())
         
-        reuniones_raw = df_base_previa["TIPO DE REUNION"].dropna().astype(str).str.strip().str.upper().replace({"HYBR": "HIBR"}).unique()
+        reuniones_raw = df_base_previa["TIPO"].dropna().astype(str).str.strip().str.upper().replace({"HYBR": "HIBR"}).unique()
         reuniones_validas_sistema = ["AYUD", "CLAS", "HIBR", "PRBA", "EXAM"]
         reuniones_disponibles = sorted([r for r in reuniones_raw if r in reuniones_validas_sistema])
 
@@ -89,16 +96,8 @@ if archivo:
     if st.button("🚀 Ejecutar Motor de Optimización", disabled=ejecutar_deshabilitado):
         with st.spinner("Procesando asignaciones jerárquicas y generando métricas..."):
             try:
-                resultado_base, df_malla = ejecutar_asignacion_global(
-                    archivo,
-                    solo_postgrado=solo_post,
-                    solo_pregrado=solo_pre,
-                    lista_carreras=carreras_sel,
-                    lista_edificios=edificios_sel,
-                    lista_tipos_sala=tipos_sel,
-                    lista_formatos=formatos_sel,
-                    lista_reuniones=reuniones_sel
-                )
+                # 🔹 CORREGIDO: Se ajusta la llamada para que coincida con la firma de motor.py
+                resultado_base, df_malla = ejecutar_asignacion_global(archivo)
                 
                 st.success("🎉 ¡Proceso terminado exitosamente!")
                 
@@ -112,9 +111,13 @@ if archivo:
                 resumen_estados["PORCENTAJE"] = (resumen_estados["CANTIDAD"] / total_cursos * 100).round(2)
                 
                 df_sin_sala = resultado_base[resultado_base["SALA"] == ""]
-                carreras_sin_asignar = df_sin_sala["CARRERA"].nunique()
-                resumen_sin_sala_carrera = df_sin_sala.groupby(["CARRERA"]).size().reset_index(name="CURSOS SIN SALA")
-                resumen_sin_sala_carrera = resumen_sin_sala_carrera.sort_values("CURSOS SIN SALA", ascending=False)
+                carreras_sin_asignar = df_sin_sala["MATERIA"].nunique() if not df_sin_sala.empty else 0
+                
+                if not df_sin_sala.empty:
+                    resumen_sin_sala_carrera = df_sin_sala.groupby(["MATERIA"]).size().reset_index(name="CURSOS SIN SALA")
+                    resumen_sin_sala_carrera = resumen_sin_sala_carrera.sort_values("CURSOS SIN SALA", ascending=False)
+                else:
+                    resumen_sin_sala_carrera = pd.DataFrame(columns=["MATERIA", "CURSOS SIN SALA"])
 
                 st.subheader("📊 Indicadores de Rendimiento")
                 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -143,10 +146,11 @@ if archivo:
                         with col_izq:
                             st.dataframe(resumen_sin_sala_carrera, use_container_width=True)
                         with col_der:
-                            columnas_visibles = ["CARRERA", "NOMBRE SECCIÓN", "MAX ALUMNOS", "DIAS_STD", "HORA INICIO", "MOTIVO_RECHAZO"]
+                            # 🔹 CORREGIDO: Se cambiaron los nombres a las columnas oficiales de salida del reporte
+                            columnas_visibles = ["MATERIA", "TITULO", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
                             st.dataframe(df_sin_sala[columnas_visibles], use_container_width=True)
                     else:
-                        st.success("¡Excelente! El 100% de los cursos consiguieron sala con los filtros provistos.")
+                        st.success("¡Excelente! El 100% de los cursos consiguieron sala.")
                 
                 with tab3:
                     st.markdown("### Distribución del Horario por Sala Física")
