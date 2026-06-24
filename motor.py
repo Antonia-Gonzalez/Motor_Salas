@@ -33,10 +33,19 @@ def ejecutar_asignacion_global(
     salas_PROV["EDIFICIO"] = salas_PROV["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
     salas_PROV["SALA"] = salas_PROV["SALA"].fillna("").astype(str).str.strip().str.upper()
 
-    # Diccionario maestro global (sirve para validar la Fase 0 aunque la sala haya sido filtrada en la UI)
+    # 🔄 [SOLUCIÓN DUPLICADOS] Detectar nombres idénticos (ej: AULA MAGNA) y renombrarlos con su aforo
+    salas_duplicadas = salas_PROV[salas_PROV.duplicated(subset=["SALA"], keep=False)]["SALA"].unique()
+
+    # Diccionario maestro global
     salas_dict_global = {}
-    for _, fila in salas_PROV.iterrows():
+    for idx, fila in salas_PROV.iterrows():
         s_nombre = str(fila["SALA"]).strip().upper()
+        
+        # Si el nombre está duplicado en la infraestructura, lo diferenciamos dinámicamente
+        if s_nombre in salas_duplicadas:
+            s_nombre = f"{s_nombre} ({int(fila['CAPACIDAD'])})"
+            salas_PROV.at[idx, "SALA"] = s_nombre  # Lo actualizamos en el DataFrame de procesamiento
+
         salas_dict_global[s_nombre] = {
             "SALA": s_nombre,
             "EDIFICIO": str(fila["EDIFICIO"]),
@@ -66,9 +75,7 @@ def ejecutar_asignacion_global(
         s_info = salas_dict_global[s_nombre]
         salas_por_edificio.setdefault(s_info["EDIFICIO"], []).append(s_info)
 
-    # =============================================================================
-    # [MEJORA 1] OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
-    # =============================================================================
+    # OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
     for edificio in salas_por_edificio:
         salas_por_edificio[edificio] = sorted(
             salas_por_edificio[edificio],
@@ -171,7 +178,6 @@ def ejecutar_asignacion_global(
         return 5
 
     base["PRIORIDAD"] = base.apply(prioridad_reunion, axis=1)
-    # [POLÍTICA ORIGINAL CONSERVED] Ordenamos el DataFrame base global
     base = base.sort_values(by=["POSTGRADO_FLAG", "PRIORIDAD", "MAX ALUMNOS"], ascending=[False, True, False]).reset_index(drop=True)
 
     # Inicialización de columnas finales de control
@@ -180,7 +186,7 @@ def ejecutar_asignacion_global(
     base["ESTADO"] = "PENDIENTE"
     base["MOTIVO_RECHAZO"] = ""
     
-    # Asegurar limpieza de la columna SALA original (peticiones especiales)
+    # Asegurar limpieza del nombre de la sala (Sin mapeos o traducciones manuales)
     if "SALA" not in base.columns:
         base["SALA"] = ""
     else:
@@ -221,8 +227,8 @@ def ejecutar_asignacion_global(
         carrera = curso["CARRERA"]
         sec = str(curso["NOMBRE SECCIÓN"]).upper()
 
-        # Validamos si la sala escrita por la escuela existe en el maestro de infraestructura
         if sala_fija in salas_dict_global:
+            # Caso Estándar: La sala manual existe en la infraestructura constante
             cap_sala = salas_dict_global[sala_fija]["CAPACIDAD"]
             
             base.loc[idx, "CAPACIDAD SALA"] = cap_sala
@@ -230,15 +236,23 @@ def ejecutar_asignacion_global(
             base.loc[idx, "ESTADO"] = "ASIGNACIÓN ESPECIAL"
             base.loc[idx, "MOTIVO_RECHAZO"] = "Respetado por petición especial de la escuela"
             
-            # 🛡️ BLOQUEO EFECTIVO EN LA MATRIZ: Añadir a ocupación para que la Fase 1 lo esquive
             ocupacion.setdefault(sala_fija, []).append(
                 (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
             )
         else:
-            # Si la escuela cometió una errata al escribir el código de la sala
-            base.loc[idx, "SALA"] = ""
-            base.loc[idx, "ESTADO"] = "ERROR_PREASIGNACION"
-            base.loc[idx, "MOTIVO_RECHAZO"] = f"La sala asignada manual '{sala_fija}' no existe en infraestructura_constante.xlsx."
+            # 🛡️ [SOLUCIÓN LABS / CASOS EXCEPCIONALES] Si la sala NO existe en infraestructura (ej: 'L.COMP-01')
+            # En lugar de fallar, la dejamos pasar como asignación especial sin tocar el maestro oficial
+            cap_sala = alumnos  # Asumimos capacidad adaptativa al tamaño del curso
+            
+            base.loc[idx, "CAPACIDAD SALA"] = cap_sala
+            base.loc[idx, "% OCUPACION SALA"] = "100.0% (Excepcional)"
+            base.loc[idx, "ESTADO"] = "ASIGNACIÓN ESPECIAL"
+            base.loc[idx, "MOTIVO_RECHAZO"] = "Sala fuera de maestro (Caso Excepcional)"
+            
+            # La registramos en la matriz horaria para que ningún curso automático intente colisionar en esa misma string de sala
+            ocupacion.setdefault(sala_fija, []).append(
+                (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
+            )
 
 
     # =============================================================================
@@ -290,7 +304,6 @@ def ejecutar_asignacion_global(
             return any(belongs_to_group(carrera, r["CARRERA"]) for r in rules)
         return True
 
-    # [MEJORA 3] BÚSQUEDA DE CONFLICTOS OPTIMIZADA O(1) ANTES DEL BUCLE
     def sala_disponible_info(sala_nombre, dia, hi, hf, fi, ff):
         if sala_nombre not in ocupacion:
             return True
@@ -332,8 +345,6 @@ def ejecutar_asignacion_global(
 
                     mejor_sala = None
                     mejor_score = -1e15
-                    
-                    # [MEJORA 2] USO DE SET PARA ACUMULAR MOTIVOS DE RECHAZO REALES
                     motivos = set()
 
                     for sala in salas_candidatas:
@@ -349,7 +360,7 @@ def ejecutar_asignacion_global(
                             motivos.add(f"Eficiencia menor al {int(umbral*100)}%")
                             continue
 
-                        if not cumple_restriccion_base(carrera, nombre):
+                        if not cumple_restriccion_base(carrera, name_sala:=nombre):
                             motivos.add("Restricción de carrera")
                             continue
 
@@ -384,11 +395,8 @@ def ejecutar_asignacion_global(
                         )
                         removidos.add(idx)
                     else:
-                        # Si pasa por todos los intentos de fases y umbrales sin éxito
                         if base.loc[idx, "ESTADO"] == "PENDIENTE":
                             base.loc[idx, "ESTADO"] = "SIN SALA"
-                            
-                            # [MEJORA 2] Muestra una auditoría limpia separada por comas y ordenada
                             if len(motivos) > 0:
                                 base.loc[idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
                             else:
@@ -396,7 +404,6 @@ def ejecutar_asignacion_global(
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
-    # SEPARAMOS LOS ÍNDICES EXCLUSIVAMENTE DE AQUELLOS QUE COMPITEN (ESTADO == PENDIENTE)
     postgrado_idx = base[(base["POSTGRADO_FLAG"] == True) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
     pregrado_idx = base[(base["POSTGRADO_FLAG"] == False) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
 
