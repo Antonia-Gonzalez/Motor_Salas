@@ -1,36 +1,101 @@
 # -*- coding: utf-8 -*-
-"""
-Motor de Asignación Académica - Versión Corregida y Restaurada
-"""
-
 import pandas as pd
-import datetime
 import numpy as np
 
-def ejecutar_asignacion_global(archivo_cursos_excel):
+def ejecutar_asignacion_global(
+    archivo_cursos_excel,
+    solo_postgrado=False,
+    solo_pregrado=False,
+    lista_carreras=None,
+    lista_reuniones=None,
+    lista_edificios=None,
+    lista_tipos_sala=None,
+    lista_formatos=None,
+    lista_salas=None
+):
+    """
+    Motor de asignación jerárquica con Fase 0 de Pre-reserva/Bloqueo de salas
+    y filtros activos desde la UI de Streamlit.
+    """
+    ruta_infraestructura = "infraestructura_constante.xlsx"
+    
     # =============================================================================
-    # 1. CARGA DE INFRAESTRUCTURA CONSTANTE (¡Solo la pestaña SALAS!)
+    # 1. CARGA DE INFRAESTRUCTURA CONSTANTE
     # =============================================================================
-    ruta_infraestructura = "infraestructura_constante.xlsx" 
     try:
-        # Ahora solo leemos la pestaña de SALAS. Ya no se necesitan RESTRICCIONES ni GRUPOS en Excel.
-        salas = pd.read_excel(ruta_infraestructura, sheet_name="SALAS")
+        salas_PROV = pd.read_excel(ruta_infraestructura, sheet_name="SALAS")
     except Exception as e:
         raise FileNotFoundError(f"No se encontró el archivo maestro '{ruta_infraestructura}' o falta la pestaña SALAS. Error: {e}")
 
-    # =============================================================================
-    # 2. CARGA Y CONCATENACIÓN DE HOJAS DE CURSOS
-    # =============================================================================
-    df_pre = pd.read_excel(archivo_cursos_excel, sheet_name="BASE PREGRADO")
-    df_pre["POSTGRADO_FLAG"] = False
+    # Limpieza inicial de columnas de infraestructura
+    salas_PROV["TIPO DE SALA"] = salas_PROV["TIPO DE SALA"].fillna("").astype(str).str.strip().str.upper()
+    salas_PROV["FORMATO"] = salas_PROV["FORMATO"].fillna("").astype(str).str.strip().str.upper()
+    salas_PROV["EDIFICIO"] = salas_PROV["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
+    salas_PROV["SALA"] = salas_PROV["SALA"].fillna("").astype(str).str.strip().str.upper()
 
-    df_post = pd.read_excel(archivo_cursos_excel, sheet_name="BASE POSTGRADO")
-    df_post["POSTGRADO_FLAG"] = True
+    # Diccionario maestro global (sirve para validar la Fase 0 aunque la sala haya sido filtrada en la UI)
+    salas_dict_global = {}
+    for _, fila in salas_PROV.iterrows():
+        s_nombre = str(fila["SALA"]).strip().upper()
+        salas_dict_global[s_nombre] = {
+            "SALA": s_nombre,
+            "EDIFICIO": str(fila["EDIFICIO"]),
+            "CAPACIDAD": int(fila["CAPACIDAD"]),
+            "TIPO DE SALA": str(fila["TIPO DE SALA"]),
+            "FORMATO": str(fila["FORMATO"]),
+            "TIPO RESTRICCION": str(fila.get("TIPO RESTRICCION", "NORMAL")).strip().upper()
+        }
 
-    base_raw = pd.concat([df_pre, df_post], ignore_index=True)
+    # APLICAR FILTROS DE LA UI A LAS SALAS DISPONIBLES PARA OPTIMIZAR
+    if lista_edificios is not None:
+        salas_PROV = salas_PROV[salas_PROV["EDIFICIO"].isin(lista_edificios)]
+    if lista_tipos_sala is not None:
+        salas_PROV = salas_PROV[salas_PROV["TIPO DE SALA"].isin(lista_tipos_sala)]
+    if lista_formatos is not None:
+        salas_PROV = salas_PROV[salas_PROV["FORMATO"].isin(lista_formatos)]
+    if lista_salas is not None:
+        salas_PROV = salas_PROV[salas_PROV["SALA"].isin(lista_salas)]
+
+    if salas_PROV.empty:
+        raise ValueError("Los filtros de infraestructura redujeron las salas disponibles a cero.")
+
+    # Agrupación de salas útiles para el motor de optimización
+    salas_por_edificio = {}
+    for _, fila in salas_PROV.iterrows():
+        s_nombre = fila["SALA"]
+        s_info = salas_dict_global[s_nombre]
+        salas_por_edificio.setdefault(s_info["EDIFICIO"], []).append(s_info)
+
 
     # =============================================================================
-    # 3. PROCESAMIENTO Y TRANSFORMACIÓN PLANA (UNPIVOT)
+    # 2. CARGA Y CONCATENACIÓN DE HOJAS DE CURSOS (PRE / POST)
+    # =============================================================================
+    dfs_a_concatenar = []
+    
+    if not solo_postgrado:
+        try:
+            df_pre = pd.read_excel(archivo_cursos_excel, sheet_name="BASE PREGRADO")
+            df_pre["POSTGRADO_FLAG"] = False
+            dfs_a_concatenar.append(df_pre)
+        except Exception as e:
+            print(f"Aviso: No se pudo leer BASE PREGRADO: {e}")
+            
+    if not solo_pregrado:
+        try:
+            df_post = pd.read_excel(archivo_cursos_excel, sheet_name="BASE POSTGRADO")
+            df_post["POSTGRADO_FLAG"] = True
+            dfs_a_concatenar.append(df_post)
+        except Exception as e:
+            print(f"Aviso: No se pudo leer BASE POSTGRADO: {e}")
+            
+    if not dfs_a_concatenar:
+        raise ValueError("No hay datos de cursos para procesar con la combinación de grado elegida.")
+        
+    base_raw = pd.concat(dfs_a_concatenar, ignore_index=True)
+
+
+    # =============================================================================
+    # 3. PROCESAMIENTO Y TRANSFORMACIÓN PLANA (UNPIVOT DE HORARIOS)
     # =============================================================================
     dias_columnas = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"]
     filas_normalizadas = []
@@ -75,14 +140,19 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
 
     base = pd.DataFrame(filas_normalizadas)
 
-    salas["TIPO DE SALA"] = salas["TIPO DE SALA"].fillna("").astype(str).str.strip().str.upper()
-    salas["FORMATO"] = salas["FORMATO"].fillna("").astype(str).str.strip().str.upper()
-    salas["EDIFICIO"] = salas["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
-    salas["SALA"] = salas["SALA"].fillna("").astype(str).str.strip().str.upper()
 
     # =============================================================================
-    # 4. CRITERIOS DE ORDENAMIENTO Y RESTRICCIONES INTERNAS
+    # 4. CRITERIOS DE FILTRADO UI, ORDENAMIENTO Y RESTRICCIONES
     # =============================================================================
+    # Aplicar filtros multiselección de la UI a los cursos normalizados
+    if lista_carreras is not None:
+        base = base[base["CARRERA"].isin(lista_carreras)]
+    if lista_reuniones is not None:
+        base = base[base["TIPO DE REUNION"].isin(lista_reuniones)]
+
+    if base.empty:
+        raise ValueError("Los filtros de carreras/reuniones redujeron la lista de cursos a cero registros.")
+
     def prioridad_reunion(row):
         r = row["TIPO DE REUNION"]
         if r == "HIBR": return 1
@@ -92,43 +162,79 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
         return 5
 
     base["PRIORIDAD"] = base.apply(prioridad_reunion, axis=1)
+    # Ordenamos el DataFrame base global
     base = base.sort_values(by=["POSTGRADO_FLAG", "PRIORIDAD", "MAX ALUMNOS"], ascending=[False, True, False]).reset_index(drop=True)
 
-    # 🔹 GRUPOS DIRECTAMENTE EN PYTHON
+    # Inicialización de columnas finales de control
+    base["CAPACIDAD SALA"] = np.nan
+    base["% OCUPACION SALA"] = ""
+    base["ESTADO"] = "PENDIENTE"
+    base["MOTIVO_RECHAZO"] = ""
+    
+    # Asegurar limpieza de la columna SALA original (peticiones especiales)
+    if "SALA" not in base.columns:
+        base["SALA"] = ""
+    else:
+        base["SALA"] = base["SALA"].fillna("").astype(str).str.strip().str.upper()
+
+    # Diccionarios de reglas de negocio heredados
     grupo_dict = {
         "INGENIERIA": ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"],
         "ADMINISTRACION": ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"],
         "SALUD": ["KIN", "MED", "ENF", "NUT", "ODON"]
     }
 
-    # 🔹 SALAS EXCLUSIVAS (Aplica si en Excel 'TIPO RESTRICCION' = 'EXCLUSIVO')
     restricciones_dict = {
         "LAB-ING1": [{"CARRERA": "INGENIERIA"}], 
         "SALA-MED5": [{"CARRERA": "MED"}],       
         "AUDITORIO-A": [{"CARRERA": "TODOS"}]
     }
 
-    salas_dict = {}
-    for _, fila in salas.iterrows():
-        s_nombre = str(fila["SALA"]).strip().upper()
-        salas_dict[s_nombre] = {
-            "SALA": s_nombre,
-            "EDIFICIO": str(fila["EDIFICIO"]).strip().upper(),
-            "CAPACIDAD": int(fila["CAPACIDAD"]),
-            "TIPO DE SALA": str(fila["TIPO DE SALA"]).strip().upper(),
-            "FORMATO": str(fila["FORMATO"]).strip().upper(),
-            "TIPO RESTRICCION": str(fila.get("TIPO RESTRICCION", "NORMAL")).strip().upper()
-        }
-
-    salas_por_edificio = {}
-    for s_nombre, s_info in salas_dict.items():
-        ed = s_info["EDIFICIO"]
-        salas_por_edificio.setdefault(ed, []).append(s_info)
-
     carreras_ing = set(grupo_dict["INGENIERIA"])
     carreras_adm = set(grupo_dict["ADMINISTRACION"])
 
-    # 🛠️ FUNCIONES AUXILIARES RESTAURADAS (Evitan el NameError)
+
+    # =============================================================================
+    # 🔒 FASE 0: PROCESAR PETICIONES ESPECIALES (PRE-RESERVAS / BLOQUEOS)
+    # =============================================================================
+    ocupacion = {}  # Matriz / Diccionario de colisiones horarias
+
+    cursos_preasignados = base[base["SALA"] != ""]
+
+    for idx, curso in cursos_preasignados.iterrows():
+        sala_fija = curso["SALA"]
+        dia_fijo = curso["DIAS_STD"]
+        hi = curso["HORA INICIO"]
+        hf = curso["HORA TERMINO"]
+        fi = curso["FECHA INICIO"]
+        ff = curso["FECHA TERMINO"]
+        alumnos = curso["MAX ALUMNOS"]
+        carrera = curso["CARRERA"]
+        sec = str(curso["NOMBRE SECCIÓN"]).upper()
+
+        # Validamos si la sala escrita por la escuela existe en el maestro de infraestructura
+        if sala_fija in salas_dict_global:
+            cap_sala = salas_dict_global[sala_fija]["CAPACIDAD"]
+            
+            base.loc[idx, "CAPACIDAD SALA"] = cap_sala
+            base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos / cap_sala * 100):.1f}%"
+            base.loc[idx, "ESTADO"] = "ASIGNACIÓN ESPECIAL"
+            base.loc[idx, "MOTIVO_RECHAZO"] = "Respetado por petición especial de la escuela"
+            
+            # 🛡️ BLOQUEO EFECTIVO EN LA MATRIZ: Añadir a ocupación para que la Fase 1 lo esquive
+            ocupacion.setdefault(sala_fija, []).append(
+                (dia_fijo, hi, hf, fi, ff, f"{carrera} - {sec}", alumnos, cap_sala)
+            )
+        else:
+            # Si la escuela cometió una errata al escribir el código de la sala
+            base.loc[idx, "SALA"] = ""
+            base.loc[idx, "ESTADO"] = "ERROR_PREASIGNACION"
+            base.loc[idx, "MOTIVO_RECHAZO"] = f"La sala asignada manual '{sala_fija}' no existe en infraestructura_constante.xlsx."
+
+
+    # =============================================================================
+    # 🛠️ FUNCIONES AUXILIARES DEL MOTOR INTERNO
+    # =============================================================================
     def edificios_preferidos(carrera):
         if carrera in carreras_ing: return ["ING", "CIEN", "REL", "BIB", "HUM"]
         if carrera in carreras_adm: return ["REL", "BIB", "CIEN", "HUM", "ING"]
@@ -168,17 +274,12 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
         return carrera == destino
 
     def cumple_restriccion_base(carrera, sala_nombre):
-        sala_info = salas_dict.get(sala_nombre)
+        sala_info = salas_dict_global.get(sala_nombre)
         if not sala_info: return False
         if sala_info["TIPO RESTRICCION"] == "EXCLUSIVO":
             rules = restricciones_dict.get(sala_nombre, [])
             return any(belongs_to_group(carrera, r["CARRERA"]) for r in rules)
         return True
-
-    # =============================================================================
-    # 5. CORE ENGINE: PROCESAMIENTO Y RESOLUCIÓN DE COLISIONES
-    # =============================================================================
-    ocupacion = {}  
 
     def sala_disponible_info(sala_nombre, dia, hi, hf, fi, ff):
         for b in ocupacion.get(sala_nombre, []):
@@ -188,12 +289,10 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
                     return False
         return True
 
-    base["SALA"] = ""
-    base["CAPACIDAD SALA"] = np.nan
-    base["% OCUPACION SALA"] = ""
-    base["ESTADO"] = "PENDIENTE"
-    base["MOTIVO_RECHAZO"] = ""
 
+    # =============================================================================
+    # 🚀 FASE 1: OPTIMIZACIÓN DE CURSOS ORDINARIOS (PENDIENTES)
+    # =============================================================================
     niveles_fase = [1, 2, 3, 4, 5]
     umbrales_eficiencia = [0.75, 0.50, 0.25, 0.0]
 
@@ -216,11 +315,12 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
                     sec = str(curso["NOMBRE SECCIÓN"]).upper()
 
                     edificios = edificios_por_fase(carrera, fase)
+                    # Candidatas provienen del diccionario de salas filtradas por la UI
                     salas_candidatas = [sala for e in edificios for sala in salas_por_edificio.get(e, [])]
 
                     mejor_sala = None
                     mejor_score = -1e15
-                    razon_actual = "Sin salas disponibles tras filtros"
+                    razon_actual = "Sin salas disponibles tras filtros de barra lateral"
 
                     for sala in salas_candidatas:
                         nombre = sala["SALA"]
@@ -236,15 +336,16 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
                             continue
 
                         if not cumple_restriccion_base(carrera, nombre):
-                            razon_actual = "Restricción de carrera"
+                            razon_actual = "Restricción de carrera exclusiva"
                             continue
 
                         if not sala_compatible_fase(curso, sala, fase):
-                            razon_actual = "Incompatibilidad técnica"
+                            razon_actual = "Incompatibilidad técnica de reunión"
                             continue
 
+                        # 💥 ¡AQUÍ IMPACTA LA FASE 0! Si está reservada por la escuela, dará False
                         if not sala_disponible_info(nombre, dia, inicio, fin, fi, ff):
-                            razon_actual = "Conflicto horario"
+                            razon_actual = "Conflicto / Choque horario con otra clase"
                             continue
 
                         score = ratio * 600
@@ -263,25 +364,30 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
                         base.loc[idx, "CAPACIDAD SALA"] = cap_final
                         base.loc[idx, "% OCUPACION SALA"] = f"{(alumnos / cap_final * 100):.1f}%"
                         base.loc[idx, "ESTADO"] = f"ASIGNADO F{fase}"
+                        base.loc[idx, "MOTIVO_RECHAZO"] = ""
                         
                         ocupacion.setdefault(nombre_sala, []).append(
                             (dia, inicio, fin, fi, ff, f"{carrera} - {sec}", alumnos, cap_final)
                         )
                         removidos.add(idx)
                     else:
-                        base.loc[idx, "ESTADO"] = "SIN SALA"
-                        base.loc[idx, "MOTIVO_RECHAZO"] = razon_actual
+                        # Si pasa por todos los intentos de fases y umbrales sin éxito
+                        if base.loc[idx, "ESTADO"] == "PENDIENTE":
+                            base.loc[idx, "ESTADO"] = "SIN SALA"
+                            base.loc[idx, "MOTIVO_RECHAZO"] = razon_actual
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
-    postgrado_idx = base[base["POSTGRADO_FLAG"] == True].index.tolist()
-    pregrado_idx = base[base["POSTGRADO_FLAG"] == False].index.tolist()
+    # SEPARAMOS LOS ÍNDICES EXCLUSIVAMENTE DE AQUELLOS QUE COMPITEN (ESTADO == PENDIENTE)
+    postgrado_idx = base[(base["POSTGRADO_FLAG"] == True) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
+    pregrado_idx = base[(base["POSTGRADO_FLAG"] == False) & (base["ESTADO"] == "PENDIENTE")].index.tolist()
 
     procesar_bloques(postgrado_idx, True)
     procesar_bloques(pregrado_idx, False)
 
+
     # =============================================================================
-    # 6. CONSTRUCCIÓN DE REPORTES FINALES (FORMATEO DE FECHAS DD-MM-AAAA)
+    # 6. CONSTRUCCIÓN DE REPORTES FINALES DE AUDITORÍA
     # =============================================================================
     base["INICIO"] = base["INICIO"].dt.strftime('%d-%m-%Y')
     base["FIN"] = base["FIN"].dt.strftime('%d-%m-%Y')
@@ -316,6 +422,6 @@ def ejecutar_asignacion_global(archivo_cursos_excel):
             
     df_malla = pd.DataFrame(registros_malla)
     if not df_malla.empty:
-        df_malla = df_malla.sort_values(by=["SALA", "DIA", "HORARIO"])
+        df_malla = df_malla.sort_values(by=["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
 
     return base_entrega, df_malla
