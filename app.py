@@ -107,7 +107,7 @@ if archivo:
     if st.button("🚀 Ejecutar Motor de Optimización", disabled=ejecutar_deshabilitado):
         with st.spinner("Procesando asignaciones jerárquicas con filtros aplicados..."):
             try:
-                # 🎯 AHORA SÍ: Enviamos todas las selecciones de la UI directamente hacia motor.py
+                # 🎯 Enviamos todas las selecciones de la UI directamente hacia motor.py
                 resultado_base, df_malla = ejecutar_asignacion_global(
                     archivo,
                     solo_postgrado=solo_post,
@@ -117,21 +117,30 @@ if archivo:
                     lista_edificios=edificios_sel,
                     lista_tipos_sala=tipos_sel,
                     lista_formatos=formatos_sel,
-                    lista_salas=salas_sel  # Enviamos el nuevo filtro de salas
+                    lista_salas=salas_sel  
                 )
                 
                 st.success("🎉 ¡Proceso terminado exitosamente!")
                 
+                # =============================================================================
+                # 🛠️ [AQUÍ SE APLICÓ EL CAMBIO] NUEVA LÓGICA DE FILTRADO POR ESTADO CLAVE
+                # =============================================================================
                 total_cursos = len(resultado_base)
-                cursos_asignados = resultado_base[resultado_base["SALA"] != ""].shape[0]
-                cursos_sin_sala = resultado_base[resultado_base["SALA"] == ""].shape[0]
+                
+                # Consideramos asignados a todos los que empiecen con "ASIGNADO" (Automáticos y Manuales)
+                cursos_asignados = resultado_base[resultado_base["ESTADO"].str.startswith("ASIGNADO", na=False)].shape[0]
+                
+                # Consideramos sin sala ÚNICAMENTE a los que el motor marcó explícitamente como "SIN SALA"
+                cursos_sin_sala = resultado_base[resultado_base["ESTADO"] == "SIN SALA"].shape[0]
+                
                 porcentaje_asignacion = (cursos_asignados / total_cursos * 100) if total_cursos > 0 else 0
                 
                 resumen_estados = resultado_base["ESTADO"].value_counts().reset_index()
                 resumen_estados.columns = ["ESTADO", "CANTIDAD"]
                 resumen_estados["PORCENTAJE"] = (resumen_estados["CANTIDAD"] / total_cursos * 100).round(2)
                 
-                df_sin_sala = resultado_base[resultado_base["SALA"] == ""]
+                # Filtramos la tabla de "Sin asignar" basándonos en el ESTADO estricto de error del motor
+                df_sin_sala = resultado_base[resultado_base["ESTADO"] == "SIN SALA"]
                 carreras_sin_asignar = df_sin_sala["MATERIA"].nunique() if not df_sin_sala.empty else 0
                 
                 if not df_sin_sala.empty:
@@ -139,6 +148,7 @@ if archivo:
                     resumen_sin_sala_carrera = resumen_sin_sala_carrera.sort_values("CURSOS SIN SALA", ascending=False)
                 else:
                     resumen_sin_sala_carrera = pd.DataFrame(columns=["MATERIA", "CURSOS SIN SALA"])
+                # =============================================================================
 
                 st.subheader("📊 Indicadores de Rendimiento")
                 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
