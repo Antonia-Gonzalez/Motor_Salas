@@ -7,7 +7,7 @@ from motor import ejecutar_asignacion_global
 st.set_page_config(page_title="Motor de Asignación de Salas", layout="wide")
 
 st.title("🏫 Programa para Asignación de Salas")
-st.markdown("Optimización de espacios académicos con filtros.")
+st.markdown("Optimización de espacios académicos con filtros activos en tiempo real.")
 
 archivo = st.file_uploader(
     "Sube tu archivo 'Programación académica.xlsx'",
@@ -21,7 +21,7 @@ if archivo:
     # 🔍 LECTURA DINÁMICA DE OPCIONES PARA LOS FILTROS
     # =============================================================================
     try:
-        # 1. Leer y concatenar las nuevas hojas de cursos del archivo subido
+        # 1. Leer y concatenar las hojas de cursos del archivo subido
         df_pre_previa = pd.read_excel(archivo, sheet_name="BASE PREGRADO")
         df_post_previa = pd.read_excel(archivo, sheet_name="BASE POSTGRADO")
         df_base_previa = pd.concat([df_pre_previa, df_post_previa], ignore_index=True)
@@ -29,11 +29,14 @@ if archivo:
         # 2. Leer las salas desde el archivo maestro constante
         df_salas_previa = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
         
-        # 3. Extraer opciones usando los nombres reales de las columnas del Excel original
+        # 3. Extraer opciones para los selectores de la barra lateral
         carreras_disponibles = sorted(df_base_previa["MATERIA"].dropna().astype(str).str.strip().str.upper().unique())
         edificios_disponibles = sorted(df_salas_previa["EDIFICIO"].dropna().astype(str).str.strip().str.upper().unique())
         tipos_disponibles = sorted(df_salas_previa["TIPO DE SALA"].dropna().astype(str).str.strip().str.upper().unique())
         formatos_disponibles = sorted(df_salas_previa["FORMATO"].dropna().astype(str).str.strip().str.upper().unique())
+        
+        # NUEVO: Lista de salas individuales disponibles
+        salas_disponibles = sorted(df_salas_previa["SALA"].dropna().astype(str).str.strip().str.upper().unique())
         
         reuniones_raw = df_base_previa["TIPO"].dropna().astype(str).str.strip().str.upper().replace({"HYBR": "HIBR"}).unique()
         reuniones_validas_sistema = ["AYUD", "CLAS", "HIBR", "PRBA", "EXAM"]
@@ -84,7 +87,15 @@ if archivo:
         default=formatos_disponibles
     )
 
-    if not carreras_sel or not edificios_sel or not tipos_sel or not formatos_sel or not reuniones_sel:
+    # NUEVO: Filtro multiselección para Salas específicas
+    salas_sel = st.sidebar.multiselect(
+        "Salas específicas permitidas",
+        options=salas_disponibles,
+        default=salas_disponibles
+    )
+
+    # Validación: verificar que ningún filtro se quede vacío
+    if not carreras_sel or not edificios_sel or not tipos_sel or not formatos_sel or not reuniones_sel or not salas_sel:
         st.sidebar.warning("⚠️ Debes seleccionar al menos un elemento en cada filtro para poder ejecutar el motor.")
         ejecutar_deshabilitado = True
     else:
@@ -94,10 +105,20 @@ if archivo:
     # 🚀 EJECUCIÓN DEL MOTOR
     # =============================================================================
     if st.button("🚀 Ejecutar Motor de Optimización", disabled=ejecutar_deshabilitado):
-        with st.spinner("Procesando asignaciones jerárquicas y generando métricas..."):
+        with st.spinner("Procesando asignaciones jerárquicas con filtros aplicados..."):
             try:
-                # 🔹 CORREGIDO: Se ajusta la llamada para que coincida con la firma de motor.py
-                resultado_base, df_malla = ejecutar_asignacion_global(archivo)
+                # 🎯 AHORA SÍ: Enviamos todas las selecciones de la UI directamente hacia motor.py
+                resultado_base, df_malla = ejecutar_asignacion_global(
+                    archivo,
+                    solo_postgrado=solo_post,
+                    solo_pregrado=solo_pre,
+                    lista_carreras=carreras_sel,
+                    lista_reuniones=reuniones_sel,
+                    lista_edificios=edificios_sel,
+                    lista_tipos_sala=tipos_sel,
+                    lista_formatos=formatos_sel,
+                    lista_salas=salas_sel  # Enviamos el nuevo filtro de salas
+                )
                 
                 st.success("🎉 ¡Proceso terminado exitosamente!")
                 
@@ -146,11 +167,10 @@ if archivo:
                         with col_izq:
                             st.dataframe(resumen_sin_sala_carrera, use_container_width=True)
                         with col_der:
-                            # 🔹 CORREGIDO: Se cambiaron los nombres a las columnas oficiales de salida del reporte
                             columnas_visibles = ["MATERIA", "TITULO", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
                             st.dataframe(df_sin_sala[columnas_visibles], use_container_width=True)
                     else:
-                        st.success("¡Excelente! El 100% de los cursos consiguieron sala.")
+                        st.success("¡Excelente! El 100% de los cursos consiguieron sala con las restricciones provistas.")
                 
                 with tab3:
                     st.markdown("### Distribución del Horario por Sala Física")
@@ -178,4 +198,4 @@ if archivo:
                 )
 
             except Exception as e:
-                st.error(f"❌ Ocurrió un error inesperado al procesar los datos: {str(e)}")
+                st.error(f"❌ Ocurrió un error al procesar el motor de optimización: {str(e)}")
