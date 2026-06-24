@@ -35,7 +35,7 @@ if archivo:
         tipos_disponibles = sorted(df_salas_previa["TIPO DE SALA"].dropna().astype(str).str.strip().str.upper().unique())
         formatos_disponibles = sorted(df_salas_previa["FORMATO"].dropna().astype(str).str.strip().str.upper().unique())
         
-        # NUEVO: Lista de salas individuales disponibles
+        # Lista de salas individuales disponibles
         salas_disponibles = sorted(df_salas_previa["SALA"].dropna().astype(str).str.strip().str.upper().unique())
         
         reuniones_raw = df_base_previa["TIPO"].dropna().astype(str).str.strip().str.upper().replace({"HYBR": "HIBR"}).unique()
@@ -87,7 +87,7 @@ if archivo:
         default=formatos_disponibles
     )
 
-    # NUEVO: Filtro multiselección para Salas específicas
+    # Filtro multiselección para Salas específicas
     salas_sel = st.sidebar.multiselect(
         "Salas específicas permitidas",
         options=salas_disponibles,
@@ -107,8 +107,8 @@ if archivo:
     if st.button("🚀 Ejecutar Motor de Optimización", disabled=ejecutar_deshabilitado):
         with st.spinner("Procesando asignaciones jerárquicas con filtros aplicados..."):
             try:
-                # 🎯 Enviamos todas las selecciones de la UI directamente hacia motor.py
-                resultado_base, df_malla = ejecutar_asignacion_global(
+                # 🎯 [CAMBIO AQUÍ]: Desempaquetamos las 6 salidas que entrega el nuevo motor
+                resultado_base, df_malla, df_edificios, df_carreras, df_salas, df_libres = ejecutar_asignacion_global(
                     archivo,
                     solo_postgrado=solo_post,
                     solo_pregrado=solo_pre,
@@ -123,7 +123,7 @@ if archivo:
                 st.success("🎉 ¡Proceso terminado exitosamente!")
                 
                 # =============================================================================
-                # 🛠️ [AQUÍ SE APLICÓ EL CAMBIO] NUEVA LÓGICA DE FILTRADO POR ESTADO CLAVE
+                # 🛠️ LÓGICA DE FILTRADO POR ESTADO CLAVE
                 # =============================================================================
                 total_cursos = len(resultado_base)
                 
@@ -148,21 +148,28 @@ if archivo:
                     resumen_sin_sala_carrera = resumen_sin_sala_carrera.sort_values("CURSOS SIN SALA", ascending=False)
                 else:
                     resumen_sin_sala_carrera = pd.DataFrame(columns=["MATERIA", "CURSOS SIN SALA"])
-                # =============================================================================
 
+                # =============================================================================
+                # RENDIMIENTO & KPIs
+                # =============================================================================
                 st.subheader("📊 Indicadores de Rendimiento")
                 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                 kpi1.metric("Total Cursos Procesados", f"{total_cursos}")
                 kpi2.metric("Cursos Asignados", f"{cursos_asignados}")
                 kpi3.metric("Porcentaje de Asignación", f"{porcentaje_asignacion:.2f}%")
-                kpi4.metric("Carreras sin Sala", f"{carreras_sin_asignar}")
+                kpi4.metric("Carreras con Faltantes", f"{carreras_sin_asignar}")
 
+                # =============================================================================
+                # 🔍 PESTAÑAS DE ANÁLISIS (AGREGADA PESTAÑA DE DASHBOARDS MÁSTER)
+                # =============================================================================
                 st.subheader("🔍 Pestañas de Análisis")
-                tab1, tab2, tab3, tab4 = st.tabs([
+                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
                     "📋 Resumen de Estados", 
-                    "⚠️ Cursos y Carreras Sin Asignar", 
-                    "🏫 Malla de Ocupación por Sala",
-                    "👁️ Vista Previa Data Completa"
+                    "⚠️ Cursos Sin Asignar", 
+                    "🏫 Malla de Ocupación",
+                    "📈 Análisis de Infraestructura",  # NUEVA
+                    "🏢 Salas Disponibles/Libres",     # NUEVA
+                    "👁️ Vista Previa Base"
                 ])
                 
                 with tab1:
@@ -187,23 +194,52 @@ if archivo:
                     st.dataframe(df_malla, use_container_width=True)
                     
                 with tab4:
+                    st.markdown("### 📈 Dashboard Analítico del Uso Físico")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("#### Ocupación y Eficiencia por Edificio")
+                        st.dataframe(df_edificios, use_container_width=True)
+                        
+                        st.markdown("#### Top Salas con Mayor Densidad/Carga (Ranking % Uso)")
+                        st.dataframe(df_salas.sort_values(by="% USO", ascending=False), use_container_width=True)
+                        
+                    with col2:
+                        st.markdown("#### Carga de Alumnos y Cursos Ocupados por Carrera")
+                        st.dataframe(df_carreras.sort_values(by="alumnos", ascending=False), use_container_width=True)
+
+                with tab5:
+                    st.markdown("### 🏢 Salas 100% Disponibles (Sin agendamiento registrado)")
+                    st.info("Las siguientes salas no recibieron ninguna asignación (automática o manual) en este proceso.")
+                    st.dataframe(df_libres, use_container_width=True)
+                
+                with tab6:
                     st.markdown("### Tabla de Cursos General (Primeros 150 registros)")
                     st.dataframe(resultado_base.head(150), use_container_width=True)
 
+                # =============================================================================
+                # 📥 ESCRITURA DEL REPORTE EXCEL CON LAS NUEVAS PESTAÑAS ANALÍTICAS
+                # =============================================================================
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
                     resultado_base.to_excel(writer, sheet_name="Asignacion_Cursos", index=False)
                     resumen_estados.to_excel(writer, sheet_name="Resumen_Estados", index=False)
                     resumen_sin_sala_carrera.to_excel(writer, sheet_name="Sin_Sala_Carrera", index=False)
                     df_malla.to_excel(writer, sheet_name="Malla_Ocupacion_Salas", index=False)
+                    
+                    # Guardar las nuevas analíticas en el Excel descargable
+                    df_edificios.to_excel(writer, sheet_name="Analisis_Edificios", index=False)
+                    df_carreras.to_excel(writer, sheet_name="Volumen_Carreras", index=False)
+                    df_salas.to_excel(writer, sheet_name="Ranking_Uso_Salas", index=False)
+                    df_libres.to_excel(writer, sheet_name="Salas_100_Libres", index=False)
                 
                 excel_en_memoria = output.getvalue()
 
                 st.markdown("---")
                 st.download_button(
-                    label="📥 Descargar Reporte Final de Auditoría (.xlsx)",
+                    label="📥 Descargar Reporte Final de Auditoría Completo (.xlsx)",
                     data=excel_en_memoria,
-                    file_name="Resultado_Final_Con_Filtros.xlsx",
+                    file_name="Reporte_Asignacion_Y_Analiticas.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
