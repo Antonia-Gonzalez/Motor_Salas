@@ -1,247 +1,77 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import io
-from motor import ejecutar_asignacion_global
+from motor import ejecutar_asignacion_incremental
 
-st.set_page_config(page_title="Motor de Asignación de Salas", layout="wide")
+# Inicialización de las estructuras persistentes en memoria global de la sesión
+if "ocupacion_global" not in st.session_state:
+    st.session_state["ocupacion_global"] = None  # Almacena el diccionario interno de colisiones
+if "historico_cursos" not in st.session_state:
+    st.session_state["historico_cursos"] = pd.DataFrame()  # Acumula las filas asignadas de todas las corridas
 
-st.title("🏫 Programa para Asignación de Salas")
-st.markdown("Optimización de espacios académicos con filtros activos en tiempo real.")
+st.sidebar.title("🗺️ Planificador Incremental")
 
-archivo = st.file_uploader(
-    "Sube tu archivo 'Programación académica.xlsx'",
-    type=["xlsx"]
+# Control de Flujo de Datos
+modo_planificacion = st.sidebar.radio(
+    "Modo de Planificación",
+    ["Nueva planificación (Limpiar pizarra)", "Continuar sobre escenario existente"]
 )
 
-if archivo:
-    st.success("📂 Archivo cargado correctamente en memoria.")
+if modo_planificacion == "Nueva planificación (Limpiar pizarra)":
+    st.session_state["ocupacion_global"] = None
+    st.session_state["historico_cursos"] = pd.DataFrame()
 
-    # =============================================================================
-    # 🔍 LECTURA DINÁMICA DE OPCIONES PARA LOS FILTROS
-    # =============================================================================
-    try:
-        # 1. Leer y concatenar las hojas de cursos del archivo subido
-        df_pre_previa = pd.read_excel(archivo, sheet_name="BASE PREGRADO")
-        df_post_previa = pd.read_excel(archivo, sheet_name="BASE POSTGRADO")
-        df_base_previa = pd.concat([df_pre_previa, df_post_previa], ignore_index=True)
-        
-        # 2. Leer las salas desde el archivo maestro constante
-        df_salas_previa = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
-        
-        # 3. Extraer opciones para los selectores de la barra lateral
-        carreras_disponibles = sorted(df_base_previa["MATERIA"].dropna().astype(str).str.strip().str.upper().unique())
-        edificios_disponibles = sorted(df_salas_previa["EDIFICIO"].dropna().astype(str).str.strip().str.upper().unique())
-        tipos_disponibles = sorted(df_salas_previa["TIPO DE SALA"].dropna().astype(str).str.strip().str.upper().unique())
-        formatos_disponibles = sorted(df_salas_previa["FORMATO"].dropna().astype(str).str.strip().str.upper().unique())
-        
-        # Lista de salas individuales disponibles
-        salas_disponibles = sorted(df_salas_previa["SALA"].dropna().astype(str).str.strip().str.upper().unique())
-        
-        reuniones_raw = df_base_previa["TIPO"].dropna().astype(str).str.strip().str.upper().replace({"HYBR": "HIBR"}).unique()
-        reuniones_validas_sistema = ["AYUD", "CLAS", "HIBR", "PRBA", "EXAM"]
-        reuniones_disponibles = sorted([r for r in reuniones_raw if r in reuniones_validas_sistema])
+# Control de eficiencia vía Slider Dinámico como solicitaste
+eficiencia_slider = st.sidebar.slider(
+    "Eficiencia de ocupación mínima requerida (%)",
+    min_value=0, max_value=100, value=75, step=5
+)
+eficiencia_minima_float = eficiencia_slider / 100.0
 
-    except Exception as e:
-        st.error(f"Error al leer las hojas del Excel para los filtros: {e}")
-        st.stop()
+# [Filtros de carrera, edificios, etc. normales de tu interfaz...]
+carreras_seleccionadas = st.sidebar.multiselect("Carreras para esta corrida", ["ICA", "ICC", "ADM", "DEM", "MED"])
 
-    # =============================================================================
-    # ⚙️ FILTROS EN LA BARRA LATERAL (SIDEBAR)
-    # =============================================================================
-    st.sidebar.header("⚙️ Filtros Establecidos")
+archivo_cargado = st.file_uploader("Cargar Base Excel de Cursos", type=["xlsx"])
+
+if st.sidebar.button("⚡ Ejecutar corrida de escenario"):
+    if archivo_cargado is not None:
+        # Ejecutar el motor inyectando el estado previo acumulado
+        df_resultado, nueva_ocupacion, df_malla = ejecutar_asignacion_incremental(
+            archivo_cursos_excel=archivo_cargado,
+            eficiencia_minima=eficiencia_minima_float,
+            ocupacion_previa=st.session_state["ocupacion_global"],
+            lista_carreras=carreras_seleccionadas
+        )
+        
+        # Guardar estados devueltos en la sesión global
+        st.session_state["ocupacion_global"] = nueva_ocupacion
+        st.session_state["historico_cursos"] = pd.concat([st.session_state["historico_cursos"], df_resultado]).drop_duplicates(
+            subset=["NRC", "DIA", "HORARIO"], keep="last"
+        )
+        
+        st.success(f"¡Corrida de escenario para {carreras_seleccionadas} consolidada con éxito!")
+
+df_asignados = st.session_state["historico_cursos"]
+df_asignados["% Num"] = pd.to_numeric(df_asignados["% OCUPACION SALA"].str.replace("%", ""), errors="coerce")
+
+sobredimensionados = df_asignados[df_asignados["% Num"] < 25][["CARRERA", "TITULO", "SALA", "CUPOS", "CAPACIDAD SALA", "% OCUPACION SALA"]]
+st.dataframe(sobredimensionados)
+
+if not df_malla.empty:
+    uso_edificios = df_malla.groupby("EDIFICIO").agg(
+        asientos_solicitados=("CUPOS", "sum"),
+        capacidad_instalada=("CAPACIDAD", "sum")
+    ).reset_index()
+    uso_edificios["% Eficiencia"] = (uso_edificios["asientos_solicitados"] / uso_edificios["capacidad_instalada"]) * 100
     
-    solo_post = st.sidebar.checkbox("Filtrar solo Postgrado", value=False)
-    solo_pre = st.sidebar.checkbox("Filtrar solo Pregrado", value=False)
+    st.bar_chart(data=uso_edificios, x="EDIFICIO", y="% Eficiencia")
 
-    st.sidebar.markdown("---")
-    st.sidebar.header("⚙️ Filtros Multiselección")
+if not df_malla.empty:
+    heatmap_data = df_malla.pivot_table(
+        index="HORARIO", 
+        columns="EDIFICIO", 
+        values="CURSO_OCUPANTE", 
+        aggfunc="count"
+    ).fillna(0)
+    st.dataframe(heatmap_data.style.background_gradient(cmap="Oranges"))
 
-    carreras_sel = st.sidebar.multiselect(
-        "Carreras a procesar",
-        options=carreras_disponibles,
-        default=carreras_disponibles
-    )
 
-    reuniones_sel = st.sidebar.multiselect(
-        "Tipos de reunión a procesar",
-        options=reuniones_disponibles,
-        default=reuniones_disponibles
-    )
-
-    edificios_sel = st.sidebar.multiselect(
-        "Edificios permitidos",
-        options=edificios_disponibles,
-        default=edificios_disponibles
-    )
-
-    tipos_sel = st.sidebar.multiselect(
-        "Tipos de Sala permitidos",
-        options=tipos_disponibles,
-        default=tipos_disponibles
-    )
-
-    formatos_sel = st.sidebar.multiselect(
-        "Formatos permitidos",
-        options=formatos_disponibles,
-        default=formatos_disponibles
-    )
-
-    # Filtro multiselección para Salas específicas
-    salas_sel = st.sidebar.multiselect(
-        "Salas específicas permitidas",
-        options=salas_disponibles,
-        default=salas_disponibles
-    )
-
-    # Validación: verificar que ningún filtro se quede vacío
-    if not carreras_sel or not edificios_sel or not tipos_sel or not formatos_sel or not reuniones_sel or not salas_sel:
-        st.sidebar.warning("⚠️ Debes seleccionar al menos un elemento en cada filtro para poder ejecutar el motor.")
-        ejecutar_deshabilitado = True
-    else:
-        ejecutar_deshabilitado = False
-
-    # =============================================================================
-    # 🚀 EJECUCIÓN DEL MOTOR
-    # =============================================================================
-    if st.button("🚀 Ejecutar Motor de Optimización", disabled=ejecutar_deshabilitado):
-        with st.spinner("Procesando asignaciones jerárquicas con filtros aplicados..."):
-            try:
-                # 🎯 [CAMBIO AQUÍ]: Desempaquetamos las 6 salidas que entrega el nuevo motor
-                resultado_base, df_malla, df_edificios, df_carreras, df_salas, df_libres = ejecutar_asignacion_global(
-                    archivo,
-                    solo_postgrado=solo_post,
-                    solo_pregrado=solo_pre,
-                    lista_carreras=carreras_sel,
-                    lista_reuniones=reuniones_sel,
-                    lista_edificios=edificios_sel,
-                    lista_tipos_sala=tipos_sel,
-                    lista_formatos=formatos_sel,
-                    lista_salas=salas_sel  
-                )
-                
-                st.success("🎉 ¡Proceso terminado exitosamente!")
-                
-                # =============================================================================
-                # 🛠️ LÓGICA DE FILTRADO POR ESTADO CLAVE
-                # =============================================================================
-                total_cursos = len(resultado_base)
-                
-                # Consideramos asignados a todos los que empiecen con "ASIGNADO" (Automáticos y Manuales)
-                cursos_asignados = resultado_base[resultado_base["ESTADO"].str.startswith("ASIGNADO", na=False)].shape[0]
-                
-                # Consideramos sin sala ÚNICAMENTE a los que el motor marcó explícitamente como "SIN SALA"
-                cursos_sin_sala = resultado_base[resultado_base["ESTADO"] == "SIN SALA"].shape[0]
-                
-                porcentaje_asignacion = (cursos_asignados / total_cursos * 100) if total_cursos > 0 else 0
-                
-                resumen_estados = resultado_base["ESTADO"].value_counts().reset_index()
-                resumen_estados.columns = ["ESTADO", "CANTIDAD"]
-                resumen_estados["PORCENTAJE"] = (resumen_estados["CANTIDAD"] / total_cursos * 100).round(2)
-                
-                # Filtramos la tabla de "Sin asignar" basándonos en el ESTADO estricto de error del motor
-                df_sin_sala = resultado_base[resultado_base["ESTADO"] == "SIN SALA"]
-                carreras_sin_asignar = df_sin_sala["MATERIA"].nunique() if not df_sin_sala.empty else 0
-                
-                if not df_sin_sala.empty:
-                    resumen_sin_sala_carrera = df_sin_sala.groupby(["MATERIA"]).size().reset_index(name="CURSOS SIN SALA")
-                    resumen_sin_sala_carrera = resumen_sin_sala_carrera.sort_values("CURSOS SIN SALA", ascending=False)
-                else:
-                    resumen_sin_sala_carrera = pd.DataFrame(columns=["MATERIA", "CURSOS SIN SALA"])
-
-                # =============================================================================
-                # RENDIMIENTO & KPIs
-                # =============================================================================
-                st.subheader("📊 Indicadores de Rendimiento")
-                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-                kpi1.metric("Total Cursos Procesados", f"{total_cursos}")
-                kpi2.metric("Cursos Asignados", f"{cursos_asignados}")
-                kpi3.metric("Porcentaje de Asignación", f"{porcentaje_asignacion:.2f}%")
-                kpi4.metric("Carreras con Faltantes", f"{carreras_sin_asignar}")
-
-                # =============================================================================
-                # 🔍 PESTAÑAS DE ANÁLISIS (AGREGADA PESTAÑA DE DASHBOARDS MÁSTER)
-                # =============================================================================
-                st.subheader("🔍 Pestañas de Análisis")
-                tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                    "📋 Resumen de Estados", 
-                    "⚠️ Cursos Sin Asignar", 
-                    "🏫 Malla de Ocupación",
-                    "📈 Análisis de Infraestructura",  # NUEVA
-                    "🏢 Salas Disponibles/Libres",     # NUEVA
-                    "👁️ Vista Previa Base"
-                ])
-                
-                with tab1:
-                    st.markdown("### Resumen Global de Estados")
-                    st.dataframe(resumen_estados, use_container_width=True)
-                
-                with tab2:
-                    st.markdown("### Detalle de Infraestructura Faltante")
-                    if cursos_sin_sala > 0:
-                        st.warning(f"Se detectaron un total de {cursos_sin_sala} cursos sin sala asignada.")
-                        col_izq, col_der = st.columns([1, 2])
-                        with col_izq:
-                            st.dataframe(resumen_sin_sala_carrera, use_container_width=True)
-                        with col_der:
-                            columnas_visibles = ["MATERIA", "TITULO", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
-                            st.dataframe(df_sin_sala[columnas_visibles], use_container_width=True)
-                    else:
-                        st.success("¡Excelente! El 100% de los cursos consiguieron sala con las restricciones provistas.")
-                
-                with tab3:
-                    st.markdown("### Distribución del Horario por Sala Física")
-                    st.dataframe(df_malla, use_container_width=True)
-                    
-                with tab4:
-                    st.markdown("### 📈 Dashboard Analítico del Uso Físico")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.markdown("#### Ocupación y Eficiencia por Edificio")
-                        st.dataframe(df_edificios, use_container_width=True)
-                        
-                        st.markdown("#### Top Salas con Mayor Densidad/Carga (Ranking % Uso)")
-                        st.dataframe(df_salas.sort_values(by="% USO", ascending=False), use_container_width=True)
-                        
-                    with col2:
-                        st.markdown("#### Carga de Alumnos y Cursos Ocupados por Carrera")
-                        st.dataframe(df_carreras.sort_values(by="alumnos", ascending=False), use_container_width=True)
-
-                with tab5:
-                    st.markdown("### 🏢 Salas 100% Disponibles (Sin agendamiento registrado)")
-                    st.info("Las siguientes salas no recibieron ninguna asignación (automática o manual) en este proceso.")
-                    st.dataframe(df_libres, use_container_width=True)
-                
-                with tab6:
-                    st.markdown("### Tabla de Cursos General (Primeros 150 registros)")
-                    st.dataframe(resultado_base.head(150), use_container_width=True)
-
-                # =============================================================================
-                # 📥 ESCRITURA DEL REPORTE EXCEL CON LAS NUEVAS PESTAÑAS ANALÍTICAS
-                # =============================================================================
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    resultado_base.to_excel(writer, sheet_name="Asignacion_Cursos", index=False)
-                    resumen_estados.to_excel(writer, sheet_name="Resumen_Estados", index=False)
-                    resumen_sin_sala_carrera.to_excel(writer, sheet_name="Sin_Sala_Carrera", index=False)
-                    df_malla.to_excel(writer, sheet_name="Malla_Ocupacion_Salas", index=False)
-                    
-                    # Guardar las nuevas analíticas en el Excel descargable
-                    df_edificios.to_excel(writer, sheet_name="Analisis_Edificios", index=False)
-                    df_carreras.to_excel(writer, sheet_name="Volumen_Carreras", index=False)
-                    df_salas.to_excel(writer, sheet_name="Ranking_Uso_Salas", index=False)
-                    df_libres.to_excel(writer, sheet_name="Salas_100_Libres", index=False)
-                
-                excel_en_memoria = output.getvalue()
-
-                st.markdown("---")
-                st.download_button(
-                    label="📥 Descargar Reporte Final de Auditoría Completo (.xlsx)",
-                    data=excel_en_memoria,
-                    file_name="Reporte_Asignacion_Y_Analiticas.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-            except Exception as e:
-                st.error(f"❌ Ocurrió un error al procesar el motor de optimización: {str(e)}")
