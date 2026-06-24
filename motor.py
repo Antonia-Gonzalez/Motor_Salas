@@ -14,9 +14,8 @@ def ejecutar_asignacion_global(
     lista_salas=None
 ):
     """
-    Motor de asignación jerárquica corregido. 
-    Se añade una Fase de Rescate Absoluto para garantizar que las salas grandes (como Aulas Magnas en HUM)
-    absorban los cursos que de otro modo quedarían sin espacio, ignorando penalizaciones de eficiencia.
+    Motor de asignación jerárquica con reporte detallado de disponibilidad espacio-temporal.
+    Muestra con precisión matemática los días, horas y fechas en que cada sala está libre.
     """
     ruta_infraestructura = "infraestructura_constante.xlsx"
     
@@ -320,7 +319,6 @@ def ejecutar_asignacion_global(
                     sec = str(curso["NOMBRE SECCIÓN"]).upper()
                     gid = curso["GRUPO_ID"]
 
-                    # Buscar en todos los edificios del maestro
                     salas_candidatas = [sala for e in salas_por_edificio for sala in salas_por_edificio[e]]
 
                     mejor_sala = None
@@ -382,8 +380,6 @@ def ejecutar_asignacion_global(
         # =============================================================================
         # 🚨 BUCLE DE RESCATE CRÍTICO (FALLBACK ABSOLUTO)
         # =============================================================================
-        # Si un curso sigue PENDIENTE, rompemos cualquier filtro de Tipo de Sala o Eficiencia.
-        # Prioridad: Ocupar las salas grandes disponibles (como Aulas Magnas en HUM) antes de dejar "SIN SALA".
         if len(no_asignados) > 0:
             removidos = set()
             for idx in no_asignados:
@@ -411,17 +407,15 @@ def ejecutar_asignacion_global(
                     nombre = sala["SALA"]
                     cap = sala["CAPACIDAD"]
 
-                    # Las dos únicas condiciones insalvables: Capacidad física y disponibilidad horaria
                     if alumnos_grupo > cap:
                         continue
 
                     if not sala_disponible_info(nombre, dia, inicio, fin, fi, ff):
                         continue
 
-                    # Priorizar salas según cercanía o de edificio HUM si corresponde, ordenando por mejor ajuste
                     ratio = alumnos_grupo / cap
                     score = ratio * 100
-                    if sala["EDIFICIO"] == "HUM": score += 500  # Empuja fuertemente el uso de infraestructura HUM
+                    if sala["EDIFICIO"] == "HUM": score += 500  
 
                     if score > mejor_score:
                         mejor_score = score
@@ -467,12 +461,12 @@ def ejecutar_asignacion_global(
             base.loc[filas_grupo.index, "MOTIVO_RECHAZO"] = ultimo_motivo
 
     # =============================================================================
-    # GENERACIÓN DE REPORTES ANALÍTICOS Y SALAS LIBRES
+    # GENERACIÓN DE REPORTES ANALÍTICOS Y SALAS LIBRES (DESOCUPADAS POR HORARIO/FECHA)
     # =============================================================================
     resumen_edificios = pd.DataFrame(columns=["EDIFICIO", "cupos_usados", "capacidad_total", "% USO"])
     resumen_carreras = pd.DataFrame(columns=["CARRERA", "cursos", "alumnos"])
     resumen_salas = pd.DataFrame(columns=["SALA", "ocupacion", "capacidad", "% USO"])
-    df_salas_libres = pd.DataFrame(columns=["SALA"])
+    df_salas_libres = pd.DataFrame(columns=["SALA", "EDIFICIO", "CAPACIDAD", "DIA", "HORARIO", "FECHA INICIO", "FECHA TERMINO"])
 
     registros_malla = []
     for sala, bloques in ocupacion.items():
@@ -488,6 +482,35 @@ def ejecutar_asignacion_global(
             
     df_malla = pd.DataFrame(registros_malla)
     
+    # 🕵️‍♂️ CÁLCULO DENTRO DE LA MATRIZ: BUSCAR HUECOS DISPONIBLES
+    bloques_universales = base[["DIA", "HORARIO", "HORA INICIO", "HORA TERMINO", "FECHA INICIO", "FECHA TERMINO"]].drop_duplicates().copy()
+    salas_df = pd.DataFrame([
+        {"SALA": s_name, "EDIFICIO": salas_dict_global[s_name]["EDIFICIO"], "CAPACIDAD": salas_dict_global[s_name]["CAPACIDAD"]}
+        for s_name in salas_PROV["SALA"].unique()
+    ])
+
+    if not salas_df.empty and not bloques_universales.empty:
+        # Combinación cartesiana (Multiplicar todas las salas activas por todos los bloques horarios del archivo)
+        df_dispo_teorica = salas_df.merge(bloques_universales, how="cross")
+        
+        # Filtrar conservando únicamente los renglones espacio-temporales libres
+        def verificar_libre(row):
+            return sala_disponible_info(
+                row["SALA"], row["DIA"], row["HORA INICIO"], row["HORA TERMINO"], 
+                row["FECHA INICIO"], row["FECHA TERMINO"]
+            )
+        
+        df_salas_libres = df_dispo_teorica[df_dispo_teorica.apply(verificar_libre, axis=1)].copy()
+        
+        # Formatear timestamps a cadenas de texto legibles para la interfaz de Streamlit
+        df_salas_libres["FECHA INICIO"] = df_salas_libres["FECHA INICIO"].dt.strftime('%d-%m-%Y')
+        df_salas_libres["FECHA TERMINO"] = df_salas_libres["FECHA TERMINO"].dt.strftime('%d-%m-%Y')
+        
+        # Ordenación jerárquica para facilitar lectura humana
+        df_salas_libres = df_salas_libres[[
+            "SALA", "EDIFICIO", "CAPACIDAD", "DIA", "HORARIO", "FECHA INICIO", "FECHA TERMINO"
+        ]].sort_values(by=["EDIFICIO", "SALA", "FECHA INICIO", "DIA", "HORARIO"]).reset_index(drop=True)
+
     if not df_malla.empty:
         df_malla = df_malla.sort_values(by=["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
         df_malla["CAPACIDAD SALA"] = pd.to_numeric(df_malla["CAPACIDAD SALA"], errors="coerce")
@@ -501,12 +524,6 @@ def ejecutar_asignacion_global(
 
         resumen_salas = df_malla.groupby("SALA").agg(ocupacion=("CUPOS_ALUMNOS", "sum"), capacidad=("CAPACIDAD SALA", "max")).reset_index()
         resumen_salas["% USO"] = (resumen_salas["ocupacion"] / resumen_salas["capacidad"] * 100).round(2)
-
-        salas_usadas = set(df_malla["SALA"].unique())
-        salas_totales = set(salas_dict_global.keys())
-        df_salas_libres = pd.DataFrame({"SALA": list(salas_totales - salas_usadas)})
-    else:
-        df_salas_libres = pd.DataFrame({"SALA": list(salas_dict_global.keys())})
 
     if not base.empty:
         resumen_carreras = base.groupby("CARRERA").agg(cursos=("CARRERA", "count"), alumnos=("CUPOS", "sum")).reset_index()
