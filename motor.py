@@ -75,12 +75,13 @@ def ejecutar_asignacion_global(
         s_info = salas_dict_global[s_nombre]
         salas_por_edificio.setdefault(s_info["EDIFICIO"], []).append(s_info)
 
+    # CORREGIDO: SE AGREGÓ LA SANGRÍA CORRECTA AL FOR
     # OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
     for edificio in salas_por_edificio:
-    salas_por_edificio[edificio] = sorted(
-        salas_por_edificio[edificio],
-        key=lambda x: x["CAPACIDAD"]
-    )
+        salas_por_edificio[edificio] = sorted(
+            salas_por_edificio[edificio],
+            key=lambda x: x["CAPACIDAD"]
+        )
 
 
     # =============================================================================
@@ -214,9 +215,10 @@ def ejecutar_asignacion_global(
     else:
         base["SALA"] = base["SALA"].fillna("").astype(str).str.strip().str.upper()
 
+    # CORREGIDO: SE CAMBIÓ 'sala_manual_per_group' POR 'sala_manual_por_grupo'
     # 🔄 Propagar asignaciones manuales a todos los miembros de la misma lista cruzada
     sala_manual_por_grupo = base[base["SALA"] != ""].groupby("GRUPO_ID")["SALA"].first()
-    if not sala_manual_por_group.empty:
+    if not sala_manual_por_grupo.empty:
         base["SALA"] = base["GRUPO_ID"].map(sala_manual_por_grupo).fillna(base["SALA"])
 
     # Diccionarios de reglas de negocio heredados
@@ -241,7 +243,7 @@ def ejecutar_asignacion_global(
     # =============================================================================
     ocupacion = {}  
 
-    cursos_preasignados = base[base["SALA"] != ""]
+    cursos_preasignados = base[base["SALA"] != "" ]
     grupos_procesados_fase0 = set()
 
     for idx, curso in cursos_preasignados.iterrows():
@@ -446,8 +448,7 @@ def ejecutar_asignacion_global(
                         )
                         removidos.add(idx)
                     else:
-    # Guardamos temporalmente el último motivo observado,
-    # pero NO marcamos SIN SALA todavía.
+                        # Guardamos temporalmente el último motivo observado, pero NO marcamos SIN SALA todavía.
                         if len(motivos) > 0:
                             indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index
 
@@ -465,16 +466,13 @@ def ejecutar_asignacion_global(
 
     procesar_bloques(postgrado_idx, True)
     procesar_bloques(pregrado_idx, False)
-# =============================================================================
-# MARCAR COMO SIN SALA SOLO AL FINAL DEL PROCESO
-# =============================================================================
 
+    # =============================================================================
+    # MARCAR COMO SIN SALA SOLO AL FINAL DEL PROCESO
+    # =============================================================================
     for gid in base["GRUPO_ID"].unique():
-    
         filas_grupo = base[base["GRUPO_ID"] == gid]
-    
         if (filas_grupo["ESTADO"] == "PENDIENTE").all():
-    
             ultimo_motivo = ""
             motivos_validos = filas_grupo[
                 filas_grupo["MOTIVO_RECHAZO"].str.strip() != ""
