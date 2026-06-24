@@ -487,20 +487,12 @@ def ejecutar_asignacion_global(
 
 
     # =============================================================================
-    # 6. CONSTRUCCIÓN DE REPORTES FINALES DE AUDITORÍA
+    # 📊 [SOLUCIÓN AL KEYERROR] GENERACIÓN DE REPORTES ANALÍTICOS ANTES DE FILTRAR COLUMNAS
     # =============================================================================
-    base["INICIO"] = base["INICIO"].dt.strftime('%d-%m-%Y')
-    base["FIN"] = base["FIN"].dt.strftime('%d-%m-%Y')
-
-    columnas_finales = [
-        "N°", "PERIODO", "ESCUELA", "NRC", "CONECTOR LIGA", "LISTA CRUZADA", 
-        "MATERIA", "CURSO SECC.", "CALIFICABLE", "TITULO", "STATUS", "P/P", 
-        "CREDITO", "ESCALA CALIFICACION", "CAMPUS", "DIA", "HORARIO", "INICIO", "FIN", 
-        "SALA", "TIPO", "RUT PROFESOR", "PROFESOR", "CUPOS", "INSCRITOS", 
-        "% INSCRITOS / CUPOS", "CAPACIDAD SALA", "% OCUPACION SALA", "ESTADO", "MOTIVO_RECHAZO"
-    ]
-    columnas_entrega = [col for col in columnas_finales if col in base.columns]
-    base_entrega = base[columnas_entrega].copy()
+    resumen_edificios = pd.DataFrame(columns=["EDIFICIO", "cupos_usados", "capacidad_total", "% USO"])
+    resumen_carreras = pd.DataFrame(columns=["CARRERA", "cursos", "alumnos"])
+    resumen_salas = pd.DataFrame(columns=["SALA", "ocupacion", "capacidad", "% USO"])
+    df_salas_libres = pd.DataFrame(columns=["SALA"])
 
     registros_malla = []
     for sala, bloques in ocupacion.items():
@@ -521,28 +513,16 @@ def ejecutar_asignacion_global(
             })
             
     df_malla = pd.DataFrame(registros_malla)
+    
     if not df_malla.empty:
-        df_malla = df_malla.sort_values(by =["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
-
-
-    # =============================================================================
-    # 📊 ANÁLISIS AGREGADOS PARA DASHBOARD (INICIALIZACIÓN VACÍA DE CONTROL)
-    # =============================================================================
-    resumen_edificios = pd.DataFrame(columns=["EDIFICIO", "cupos_usados", "capacidad_total", "% USO"])
-    resumen_carreras = pd.DataFrame(columns=["CARRERA", "cursos", "alumnos"])
-    resumen_salas = pd.DataFrame(columns=["SALA", "ocupacion", "capacidad", "% USO"])
-    df_salas_libres = pd.DataFrame(columns=["SALA"])
-
-    # 1. Análisis de Edificios, Ocupación de Salas y Salas Libres (vía df_malla)
-    if not df_malla.empty:
+        df_malla = df_malla.sort_values(by=["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
         df_malla["CAPACIDAD SALA"] = pd.to_numeric(df_malla["CAPACIDAD SALA"], errors="coerce")
         df_malla["CUPOS_ALUMNOS"] = pd.to_numeric(df_malla["CUPOS_ALUMNOS"], errors="coerce")
 
-        # Mapear sala -> edificio dinámicamente usando el diccionario maestro global
         sala_a_edificio = {sala: info["EDIFICIO"] for sala, info in salas_dict_global.items()}
         df_malla["EDIFICIO"] = df_malla["SALA"].map(sala_a_edificio)
 
-        # 📊 2. Uso de edificios (ocupación global)
+        # 📊 Uso de edificios
         resumen_edificios = df_malla.groupby("EDIFICIO").agg(
             cupos_usados=("CUPOS_ALUMNOS", "sum"),
             capacidad_total=("CAPACIDAD SALA", "sum")
@@ -551,7 +531,7 @@ def ejecutar_asignacion_global(
             resumen_edificios["cupos_usados"] / resumen_edificios["capacidad_total"] * 100
         ).round(2)
 
-        # 📊 5. Ocupación por sala (ranking)
+        # 📊 Ocupación por sala
         resumen_salas = df_malla.groupby("SALA").agg(
             ocupacion=("CUPOS_ALUMNOS", "sum"),
             capacidad=("CAPACIDAD SALA", "max")
@@ -560,21 +540,36 @@ def ejecutar_asignacion_global(
             resumen_salas["ocupacion"] / resumen_salas["capacidad"] * 100
         ).round(2)
 
-        # 🏢 4. Salas libres / disponibilidad real
+        # 🏢 Salas libres
         salas_usadas = set(df_malla["SALA"].unique())
         salas_totales = set(salas_dict_global.keys())
         salas_libres = list(salas_totales - salas_usadas)
         df_salas_libres = pd.DataFrame({"SALA": salas_libres})
     else:
-        # Si la malla está vacía, todas las salas del maestro están libres
         df_salas_libres = pd.DataFrame({"SALA": list(salas_dict_global.keys())})
 
-    # 📊 3. Uso por carrera (quién ocupa más volumen físico)
-    if not base_entrega.empty:
-        resumen_carreras = base_entrega.groupby("CARRERA").agg(
+    # 📊 Uso por carrera (Utilizando la variable interna 'base' que contiene la columna 'CARRERA')
+    if not base.empty:
+        resumen_carreras = base.groupby("CARRERA").agg(
             cursos=("CARRERA", "count"),
             alumnos=("CUPOS", "sum")
         ).reset_index()
+
+    # =============================================================================
+    # 6. CONSTRUCCIÓN DE REPORTES FINALES DE AUDITORÍA (RECORTE DE COLUMNAS)
+    # =============================================================================
+    base["INICIO"] = base["INICIO"].dt.strftime('%d-%m-%Y')
+    base["FIN"] = base["FIN"].dt.strftime('%d-%m-%Y')
+
+    columnas_finales = [
+        "N°", "PERIODO", "ESCUELA", "NRC", "CONECTOR LIGA", "LISTA CRUZADA", 
+        "MATERIA", "CURSO SECC.", "CALIFICABLE", "TITULO", "STATUS", "P/P", 
+        "CREDITO", "ESCALA CALIFICACION", "CAMPUS", "DIA", "HORARIO", "INICIO", "FIN", 
+        "SALA", "TIPO", "RUT PROFESOR", "PROFESOR", "CUPOS", "INSCRITOS", 
+        "% INSCRITOS / CUPOS", "CAPACIDAD SALA", "% OCUPACION SALA", "ESTADO", "MOTIVO_RECHAZO"
+    ]
+    columnas_entrega = [col for col in columnas_finales if col in base.columns]
+    base_entrega = base[columnas_entrega].copy()
 
     # =============================================================================
     # 📦 RETORNO DEL MOTOR EXPANDIDO
