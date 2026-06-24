@@ -15,7 +15,8 @@ def ejecutar_asignacion_global(
 ):
     """
     Motor de asignación jerárquica con Fase 0 de Pre-reserva/Bloqueo de salas,
-    filtros activos desde la UI de Streamlit y soporte avanzado para LISTAS CRUZADAS.
+    filtros activos desde la UI de Streamlit, soporte avanzado para LISTAS CRUZADAS
+    y generación de reportes analíticos agregados para Dashboards.
     """
     ruta_infraestructura = "infraestructura_constante.xlsx"
     
@@ -57,13 +58,17 @@ def ejecutar_asignacion_global(
 
     # APLICAR FILTROS DE LA UI A LAS SALAS DISPONIBLES PARA OPTIMIZAR
     if lista_edificios is not None:
-        salas_PROV = salas_PROV[salas_PROV["EDIFICIO"].isin(lista_edificios)]
+        text_edificios = [str(e).upper().strip() for e in lista_edificios]
+        salas_PROV = salas_PROV[salas_PROV["EDIFICIO"].isin(text_edificios)]
     if lista_tipos_sala is not None:
-        salas_PROV = salas_PROV[salas_PROV["TIPO DE SALA"].isin(lista_tipos_sala)]
+        text_tipos = [str(t).upper().strip() for t in lista_tipos_sala]
+        salas_PROV = salas_PROV[salas_PROV["TIPO DE SALA"].isin(text_tipos)]
     if lista_formatos is not None:
-        salas_PROV = salas_PROV[salas_PROV["FORMATO"].isin(lista_formatos)]
+        text_formatos = [str(f).upper().strip() for f in lista_formatos]
+        salas_PROV = salas_PROV[salas_PROV["FORMATO"].isin(text_formatos)]
     if lista_salas is not None:
-        salas_PROV = salas_PROV[salas_PROV["SALA"].isin(lista_salas)]
+        text_salas = [str(s).upper().strip() for s in lista_salas]
+        salas_PROV = salas_PROV[salas_PROV["SALA"].isin(text_salas)]
 
     if salas_PROV.empty:
         raise ValueError("Los filtros de infraestructura redujeron las salas disponibles a cero.")
@@ -75,7 +80,6 @@ def ejecutar_asignacion_global(
         s_info = salas_dict_global[s_nombre]
         salas_por_edificio.setdefault(s_info["EDIFICIO"], []).append(s_info)
 
-    # CORREGIDO: SE AGREGÓ LA SANGRÍA CORRECTA AL FOR
     # OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
     for edificio in salas_por_edificio:
         salas_por_edificio[edificio] = sorted(
@@ -186,9 +190,11 @@ def ejecutar_asignacion_global(
     # 4. CRITERIOS DE FILTRADO UI, ORDENAMIENTO Y RESTRICCIONES
     # =============================================================================
     if lista_carreras is not None:
-        base = base[base["CARRERA"].isin(lista_carreras)]
+        text_carreras = [str(c).upper().strip() for c in lista_carreras]
+        base = base[base["CARRERA"].isin(text_carreras)]
     if lista_reuniones is not None:
-        base = base[base["TIPO DE REUNION"].isin(lista_reuniones)]
+        text_reuniones = [str(r).upper().strip() for r in lista_reuniones]
+        base = base[base["TIPO DE REUNION"].isin(text_reuniones)]
 
     if base.empty:
         raise ValueError("Los filtros de carreras/reuniones redujeron la lista de cursos a cero registros.")
@@ -215,7 +221,6 @@ def ejecutar_asignacion_global(
     else:
         base["SALA"] = base["SALA"].fillna("").astype(str).str.strip().str.upper()
 
-    # CORREGIDO: SE CAMBIÓ 'sala_manual_per_group' POR 'sala_manual_por_grupo'
     # 🔄 Propagar asignaciones manuales a todos los miembros de la misma lista cruzada
     sala_manual_por_grupo = base[base["SALA"] != ""].groupby("GRUPO_ID")["SALA"].first()
     if not sala_manual_por_grupo.empty:
@@ -253,12 +258,11 @@ def ejecutar_asignacion_global(
         hf = curso["HORA TERMINO"]
         fi = curso["FECHA INICIO"]
         ff = curso["FECHA TERMINO"]
-        alumnos_total = int(curso["CUPOS_CONSOLIDADOS"]) # 🌟 Usamos el cupo total del grupo fusionado
+        alumnos_total = int(curso["CUPOS_CONSOLIDADOS"])
         carrera = curso["CARRERA"]
         sec = str(curso["NOMBRE SECCIÓN"]).upper()
         gid = curso["GRUPO_ID"]
 
-        # Formatear nombre en la malla horaria final
         if gid.startswith("CRUZ_"):
             nombre_ocupante = f"LISTA CRUZADA: {curso['LISTA CRUZADA']}"
         else:
@@ -272,7 +276,6 @@ def ejecutar_asignacion_global(
             base.loc[idx, "ESTADO"] = "ASIGNADO MANUAL"  
             base.loc[idx, "MOTIVO_RECHAZO"] = "Respetado por petición especial de la escuela"
             
-            # Evitar duplicar el bloqueo en el diccionario de ocupación
             if gid not in grupos_procesados_fase0:
                 ocupacion.setdefault(sala_fija, []).append(
                     (dia_fijo, hi, hf, fi, ff, nombre_ocupante, alumnos_total, cap_sala)
@@ -368,14 +371,13 @@ def ejecutar_asignacion_global(
                 removidos = set()
 
                 for idx in no_asignados:
-                    # Si ya fue asignado previamente (por ejemplo, a través de otro miembro del grupo)
                     if base.loc[idx, "ESTADO"] != "PENDIENTE":
                         removidos.add(idx)
                         continue
 
                     curso = base.loc[idx]
                     carrera = curso["CARRERA"]
-                    alumnos_grupo = int(curso["CUPOS_CONSOLIDADOS"]) # 🌟 Evaluamos con el total consolidado
+                    alumnos_grupo = int(curso["CUPOS_CONSOLIDADOS"])
                     dia = curso["DIAS_STD"]
                     inicio = curso["HORA INICIO"]
                     fin = curso["HORA TERMINO"]
@@ -428,7 +430,6 @@ def ejecutar_asignacion_global(
                         nombre_sala = mejor_sala["SALA"]
                         cap_final = mejor_sala["CAPACIDAD"]
                         
-                        # 🌟 ASIGNACIÓN EN BLOQUE: Buscamos todas las filas del mismo grupo y les escribimos la misma sala
                         indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index.tolist()
                         
                         for g_idx in indices_mismo_grupo:
@@ -448,16 +449,13 @@ def ejecutar_asignacion_global(
                         )
                         removidos.add(idx)
                     else:
-                        # Guardamos temporalmente el último motivo observado, pero NO marcamos SIN SALA todavía.
                         if len(motivos) > 0:
                             indices_mismo_grupo = base[base["GRUPO_ID"] == gid].index
-
                             for g_idx in indices_mismo_grupo:
                                 base.loc[g_idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
-    # 🌟 EXTRAEMOS REPRESENTANTES ÚNICOS: Un solo índice por grupo para evitar evaluar duplicados
     base_pendientes = base[base["ESTADO"] == "PENDIENTE"]
     df_representantes = base_pendientes.drop_duplicates(subset=["GRUPO_ID"], keep="first")
 
@@ -466,6 +464,7 @@ def ejecutar_asignacion_global(
 
     procesar_bloques(postgrado_idx, True)
     procesar_bloques(pregrado_idx, False)
+
 
     # =============================================================================
     # MARCAR COMO SIN SALA SOLO AL FINAL DEL PROCESO
@@ -525,4 +524,59 @@ def ejecutar_asignacion_global(
     if not df_malla.empty:
         df_malla = df_malla.sort_values(by =["SALA", "DIA", "HORARIO"]).reset_index(drop=True)
 
-    return base_entrega, df_malla
+
+    # =============================================================================
+    # 📊 ANÁLISIS AGREGADOS PARA DASHBOARD (INICIALIZACIÓN VACÍA DE CONTROL)
+    # =============================================================================
+    resumen_edificios = pd.DataFrame(columns=["EDIFICIO", "cupos_usados", "capacidad_total", "% USO"])
+    resumen_carreras = pd.DataFrame(columns=["CARRERA", "cursos", "alumnos"])
+    resumen_salas = pd.DataFrame(columns=["SALA", "ocupacion", "capacidad", "% USO"])
+    df_salas_libres = pd.DataFrame(columns=["SALA"])
+
+    # 1. Análisis de Edificios, Ocupación de Salas y Salas Libres (vía df_malla)
+    if not df_malla.empty:
+        df_malla["CAPACIDAD SALA"] = pd.to_numeric(df_malla["CAPACIDAD SALA"], errors="coerce")
+        df_malla["CUPOS_ALUMNOS"] = pd.to_numeric(df_malla["CUPOS_ALUMNOS"], errors="coerce")
+
+        # Mapear sala -> edificio dinámicamente usando el diccionario maestro global
+        sala_a_edificio = {sala: info["EDIFICIO"] for sala, info in salas_dict_global.items()}
+        df_malla["EDIFICIO"] = df_malla["SALA"].map(sala_a_edificio)
+
+        # 📊 2. Uso de edificios (ocupación global)
+        resumen_edificios = df_malla.groupby("EDIFICIO").agg(
+            cupos_usados=("CUPOS_ALUMNOS", "sum"),
+            capacidad_total=("CAPACIDAD SALA", "sum")
+        ).reset_index()
+        resumen_edificios["% USO"] = (
+            resumen_edificios["cupos_usados"] / resumen_edificios["capacidad_total"] * 100
+        ).round(2)
+
+        # 📊 5. Ocupación por sala (ranking)
+        resumen_salas = df_malla.groupby("SALA").agg(
+            ocupacion=("CUPOS_ALUMNOS", "sum"),
+            capacidad=("CAPACIDAD SALA", "max")
+        ).reset_index()
+        resumen_salas["% USO"] = (
+            resumen_salas["ocupacion"] / resumen_salas["capacidad"] * 100
+        ).round(2)
+
+        # 🏢 4. Salas libres / disponibilidad real
+        salas_usadas = set(df_malla["SALA"].unique())
+        salas_totales = set(salas_dict_global.keys())
+        salas_libres = list(salas_totales - salas_usadas)
+        df_salas_libres = pd.DataFrame({"SALA": salas_libres})
+    else:
+        # Si la malla está vacía, todas las salas del maestro están libres
+        df_salas_libres = pd.DataFrame({"SALA": list(salas_dict_global.keys())})
+
+    # 📊 3. Uso por carrera (quién ocupa más volumen físico)
+    if not base_entrega.empty:
+        resumen_carreras = base_entrega.groupby("CARRERA").agg(
+            cursos=("CARRERA", "count"),
+            alumnos=("CUPOS", "sum")
+        ).reset_index()
+
+    # =============================================================================
+    # 📦 RETORNO DEL MOTOR EXPANDIDO
+    # =============================================================================
+    return base_entrega, df_malla, resumen_edificios, resumen_carreras, resumen_salas, df_salas_libres
