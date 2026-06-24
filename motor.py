@@ -66,6 +66,15 @@ def ejecutar_asignacion_global(
         s_info = salas_dict_global[s_nombre]
         salas_por_edificio.setdefault(s_info["EDIFICIO"], []).append(s_info)
 
+    # =============================================================================
+    # [MEJORA 1] OPTIMIZACIÓN: ORDENAR SALAS POR CAPACIDAD ASCENDENTE
+    # =============================================================================
+    for edificio in salas_por_edificio:
+        salas_por_edificio[edificio] = sorted(
+            salas_por_edificio[edificio],
+            key=lambda x: x["CAPACIDAD"]
+        )
+
 
     # =============================================================================
     # 2. CARGA Y CONCATENACIÓN DE HOJAS DE CURSOS (PRE / POST)
@@ -162,7 +171,7 @@ def ejecutar_asignacion_global(
         return 5
 
     base["PRIORIDAD"] = base.apply(prioridad_reunion, axis=1)
-    # Ordenamos el DataFrame base global
+    # [POLÍTICA ORIGINAL CONSERVED] Ordenamos el DataFrame base global
     base = base.sort_values(by=["POSTGRADO_FLAG", "PRIORIDAD", "MAX ALUMNOS"], ascending=[False, True, False]).reset_index(drop=True)
 
     # Inicialización de columnas finales de control
@@ -281,8 +290,12 @@ def ejecutar_asignacion_global(
             return any(belongs_to_group(carrera, r["CARRERA"]) for r in rules)
         return True
 
+    # [MEJORA 3] BÚSQUEDA DE CONFLICTOS OPTIMIZADA O(1) ANTES DEL BUCLE
     def sala_disponible_info(sala_nombre, dia, hi, hf, fi, ff):
-        for b in ocupacion.get(sala_nombre, []):
+        if sala_nombre not in ocupacion:
+            return True
+
+        for b in ocupacion[sala_nombre]:
             b_dia, b_hi, b_hf, b_fi, b_ff, _, _, _ = b
             if b_dia == dia:
                 if (hi < b_hf and hf > b_hi) and (fi <= b_ff and ff >= b_fi):
@@ -315,37 +328,37 @@ def ejecutar_asignacion_global(
                     sec = str(curso["NOMBRE SECCIÓN"]).upper()
 
                     edificios = edificios_por_fase(carrera, fase)
-                    # Candidatas provienen del diccionario de salas filtradas por la UI
                     salas_candidatas = [sala for e in edificios for sala in salas_por_edificio.get(e, [])]
 
                     mejor_sala = None
                     mejor_score = -1e15
-                    razon_actual = "Sin salas disponibles tras filtros de barra lateral"
+                    
+                    # [MEJORA 2] USO DE SET PARA ACUMULAR MOTIVOS DE RECHAZO REALES
+                    motivos = set()
 
                     for sala in salas_candidatas:
                         nombre = sala["SALA"]
                         cap = sala["CAPACIDAD"]
 
                         if alumnos > cap:
-                            razon_actual = "Capacidad insuficiente"
+                            motivos.add("Capacidad insuficiente")
                             continue
 
                         ratio = alumnos / cap
                         if ratio < umbral:
-                            razon_actual = f"Eficiencia baja para corte del {int(umbral*100)}%"
+                            motivos.add(f"Eficiencia menor al {int(umbral*100)}%")
                             continue
 
                         if not cumple_restriccion_base(carrera, nombre):
-                            razon_actual = "Restricción de carrera exclusiva"
+                            motivos.add("Restricción de carrera")
                             continue
 
                         if not sala_compatible_fase(curso, sala, fase):
-                            razon_actual = "Incompatibilidad técnica de reunión"
+                            motivos.add("Tipo de sala incompatible")
                             continue
 
-                        # 💥 ¡AQUÍ IMPACTA LA FASE 0! Si está reservada por la escuela, dará False
                         if not sala_disponible_info(nombre, dia, inicio, fin, fi, ff):
-                            razon_actual = "Conflicto / Choque horario con otra clase"
+                            motivos.add("Choque horario")
                             continue
 
                         score = ratio * 600
@@ -374,7 +387,12 @@ def ejecutar_asignacion_global(
                         # Si pasa por todos los intentos de fases y umbrales sin éxito
                         if base.loc[idx, "ESTADO"] == "PENDIENTE":
                             base.loc[idx, "ESTADO"] = "SIN SALA"
-                            base.loc[idx, "MOTIVO_RECHAZO"] = razon_actual
+                            
+                            # [MEJORA 2] Muestra una auditoría limpia separada por comas y ordenada
+                            if len(motivos) > 0:
+                                base.loc[idx, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos))
+                            else:
+                                base.loc[idx, "MOTIVO_RECHAZO"] = "No se encontró sala compatible"
 
                 no_asignados = [i for i in no_asignados if i not in removidos]
 
