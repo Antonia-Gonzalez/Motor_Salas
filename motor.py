@@ -192,14 +192,15 @@ def ejecutar_asignacion_escenario(
         df_cursos[col_cruzada] = df_cursos[col_cruzada].fillna("").astype(str).str.strip()
         df_valid_cruz = df_cursos[df_cursos[col_cruzada] != ""]
         for name, group in df_valid_cruz.groupby([col_cruzada, "DIA", "HORARIO"]):
-            if modo_lista_cruzada == "SUMAR":
+            # Forzamos a que sume, o si viene vacío/otro valor, la suma sea el comportamiento base
+            if modo_lista_cruzada == "SUMAR" or not modo_lista_cruzada:
                 val = group["CUPOS"].sum()
             elif modo_lista_cruzada == "MAXIMO":
                 val = group["CUPOS"].max()
             elif modo_lista_cruzada == "PROMEDIO":
                 val = int(group["CUPOS"].mean())
             else:
-                val = group["CUPOS"].max()
+                val = group["CUPOS"].sum() # Fallback seguro a SUMAR en vez de MAXIMO
             dict_cupos_cruzados[name] = val
 
     # Cola de prioridades
