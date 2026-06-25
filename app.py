@@ -4,7 +4,7 @@ import io
 from motor import ejecutar_asignacion_escenario
 
 st.set_page_config(layout="wide", page_title="BI Planta Física V2", page_icon="🏛️")
-st.title("🏛️ Sistema BI de Infraestructura Universitaria e Inteligencia Inversa")
+st.title("🏛️ Sistema BI de Infraestructura Universitaria")
 
 if "planificacion" not in st.session_state:
     st.session_state["planificacion"] = {
@@ -18,7 +18,14 @@ if "planificacion" not in st.session_state:
 # PANEL DE CONTROL LATERAL
 st.sidebar.header("⚙️ Parámetros de Simulación")
 id_config = st.sidebar.text_input("Código de Corrida", value=f"RUN_{len(st.session_state['planificacion']['escenarios_metadata'])+1}")
-carreras_input = st.sidebar.multiselect("Escuelas Planificadas", ["ICA", "ICC", "ADM", "DEM", "MED"], default=["ICA", "ICC"])
+
+# 🔄 CAMBIO: Selección múltiple enfocada explícitamente en Carreras
+carreras_input = st.sidebar.multiselect(
+    "Carreras Planificadas a Correr:", 
+    ["ICA", "ICC", "ADM", "DEM", "MED", "INF", "PSI", "DER"], 
+    default=["ICA", "ICC"]
+)
+
 eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 75, step=5)
 modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
 modo_cruzada_sel = st.sidebar.selectbox("Agrupamiento Listas Cruzadas", ["MAXIMO", "SUMAR", "PROMEDIO"], index=0)
@@ -29,10 +36,9 @@ if archivo_maestro is not None:
 
 if st.sidebar.button("⚡ Computar Asignación de Planta"):
     if st.session_state["planificacion"]["archivo_maestro_bytes"] is not None and carreras_input:
-        with st.spinner("Ejecutando balance multi-fase en memoria transaccional..."):
+        with st.spinner("Ejecutando balance en memoria transaccional..."):
             archivo_mem = io.BytesIO(st.session_state["planificacion"]["archivo_maestro_bytes"])
             
-            # Sincronización exacta de variables devueltas
             df_res, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
                 archivo_cursos_excel=archivo_mem, escenario_id=id_config,
                 eficiencia_minima=eficiencia_pct / 100.0, modo_estricto=modo_estricto_bool,
@@ -62,15 +68,17 @@ if st.sidebar.button("⚡ Computar Asignación de Planta"):
 if st.session_state["planificacion"]["escenarios_metadata"]:
     meta_actual = st.session_state["planificacion"]["escenarios_metadata"][-1]
     st.markdown("### 🎯 Cuadro de Mando Operativo General")
-    c1, c2, c3, c4 = st.columns(4)
+    
+    # 🔄 CAMBIO: Rediseño a 3 columnas para remover "Horas Totales Ocupadas"
+    c1, c2, c3 = st.columns(3)
     c1.metric("Cursos Asignados con Éxito", meta_actual["asignados"])
     c2.metric("Efectividad de Asignación", f"{meta_actual['porcentaje_asignacion']}%")
     c3.metric("Salas Activas en Malla", meta_actual["salas_utilizadas"])
-    c4.metric("Horas Totales Ocupadas", f"{meta_actual['horas_ocupadas']} hrs")
     st.markdown("---")
 
+# 🔄 CAMBIO: Pestaña renombrada a "Horarios Libres de Salas"
 tab_control, tab_analitica, tab_cuellos, tab_calendario, tab_criticos, tab_libres = st.tabs([
-    "📋 Gestión de Corridas", "📊 Planta Física", "🔥 Saturación Temporal", "📅 Matriz de Calendarios", "🚨 Control de Rechazos", "🔓 Slots Libres Reales"
+    "📋 Gestión de Corridas", "📊 Planta Física", "🔥 Saturación Temporal", "📅 Matriz de Calendarios", "🚨 Control de Rechazos", "🔓 Horarios Libres de Salas"
 ])
 
 with tab_control:
@@ -79,7 +87,7 @@ with tab_control:
         opciones_eliminar = [e["escenario"] for e in st.session_state["planificacion"]["escenarios_metadata"]]
         target_eliminar = st.selectbox("Seleccione simulación a remover:", opciones_eliminar)
         
-        if st.button("🗑️ Purgar Escenario y Re-calcular Cascada"):
+        if st.button("🗑️ Purgar Escenario"):
             st.session_state["planificacion"]["escenarios_config"].pop(target_eliminar, None)
             st.session_state["planificacion"]["ocupacion"] = {}
             configs_restantes = list(st.session_state["planificacion"]["escenarios_config"].values())
@@ -109,37 +117,35 @@ with tab_analitica:
     st.subheader("📊 Métricas de Capacidad Física")
     df_s = st.session_state["planificacion"]["metricas_salas"]
     df_e = st.session_state["planificacion"]["metricas_edificios"]
-    df_car = st.session_state["planificacion"]["met_carreras"]
+    df_tip = st.session_state["planificacion"]["met_tipos"]
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         if not df_e.empty:
             st.markdown("##### 🏢 Uso Real de Infraestructura por Edificio (%)")
             st.bar_chart(df_e.set_index("EDIFICIO")["% UTILIZACIÓN SEMANAL HORARIA"])
-        if not df_car.empty:
-            st.markdown("##### 🎓 Consumo de Horas Cátedra por Escuela")
-            st.bar_chart(df_car.set_index("CARRERA")["HORAS_CONSUMIDAS"])
+            
+        # 🔄 CAMBIO: Se removió por completo el gráfico de "Consumo de Horas Cátedra por Escuela"
     with col_g2:
         if not df_s.empty:
             st.markdown("##### 🏛️ Top 10 Aulas con Mayor Saturación (Horas Semanales)")
             st.bar_chart(df_s.sort_values("HORAS_OCUPADAS", ascending=False).head(10).set_index("SALA")["HORAS_OCUPADAS"])
-            st.markdown("##### 📉 Top 10 Aulas con Peor Eficiencia de Asientos Ocupados")
-            st.bar_chart(df_s.sort_values("EFICIENCIA_PROMEDIO", ascending=True).head(10).set_index("SALA")["EFICIENCIA_PROMEDIO"])
+        if not df_tip.empty:
+            st.markdown("##### ⚙️ Distribución de Horas por Tipo de Reunión")
+            st.bar_chart(df_tip.set_index("TIPO_REUNION")["HORAS_CONSUMIDAS"])
 
 with tab_cuellos:
-    # 🛠️ SOLUCIÓN PROBLEMA 1 Y 2: Renderizado impecable de la demanda temporal acoplada
     st.subheader("🔥 Análisis de Presión Temporal por Momento Operativo")
     df_dem = st.session_state["planificacion"]["demanda_horaria"]
     if not df_dem.empty:
-        st.write("Identificación exacta de cuellos de botella bidimensionales (`DÍA` + `HORA`):")
+        st.write("Identificación de momentos críticos (`DÍA` + `HORA`):")
         st.line_chart(df_dem.set_index("MOMENTO_OPERATIVO")["BLOQUES_ACTIVOS"])
         st.dataframe(df_dem[["DIA", "HORA_STR", "BLOQUES_ACTIVOS"]], use_container_width=True, hide_index=True)
     else:
-        st.info("Sin registros de saturación temporal computados.")
+        st.info("Sin registros de saturación temporal.")
 
 with tab_calendario:
-    # 🛠️ SOLUCIÓN PROBLEMA 3: Orden cronológico estricto por hora de inicio sin solapamientos falsos
-    st.subheader("📅 Distribución Semanal Libre de Falsas Colisiones")
+    st.subheader("📅 Distribución Semanal por Sala")
     df_malla_cal = st.session_state["planificacion"]["df_malla"]
     
     if not df_malla_cal.empty:
@@ -155,17 +161,15 @@ with tab_calendario:
                 values="CURSO_OCUPANTE",
                 aggfunc=lambda x: " ⚠️ COLISIÓN: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
             )
+            
+            indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x, format="%H:%M").time())
             dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
-            df_pivot = df_pivot.reindex(columns=dias_columnas).fillna("🟢 Completamente Libre")
+            
+            df_pivot = df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("🟢 Completamente Libre")
             st.markdown(f"**Matriz Temporal de Operación de la Sala: {sala_seleccionada}**")
             st.dataframe(df_pivot, use_container_width=True)
-        else:
-            st.success("Esta sala no tiene asignaciones cargadas en este escenario.")
-    else:
-        st.info("Requiere una simulación activa para renderizar el calendario.")
 
 with tab_criticos:
-    # 🛠️ SOLUCIÓN PROBLEMA 5: Métricas macro para decisiones de infraestructura y expansión de planta
     st.subheader("🚨 Diagnóstico Estratégico y Tasas de Rechazo")
     df_rech = st.session_state["planificacion"]["rechazos_carrera"]
     df_res_criticos = st.session_state["planificacion"]["df_resultado"]
@@ -182,13 +186,11 @@ with tab_criticos:
             columnas_operativas = ["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
             st.dataframe(df_sin_sala[columnas_operativas].drop_duplicates(), use_container_width=True, hide_index=True)
         else:
-            st.success("🏆 ¡Eficiencia perfecta! Todos los cursos encontraron un aula compatible.")
-    else:
-        st.info("No se registran datos. Computa una asignación académica.")
+            st.success("🏆 ¡Todos los cursos encontraron un aula compatible!")
 
 with tab_libres:
-    # 🛠️ SOLUCIÓN PROBLEMA 4: Inventario real sobre la grilla teórica maestra universitaria
-    st.subheader("🔓 Disponibilidad Real Inversa (Inventario Oculto de la Universidad)")
+    # 🔄 CAMBIO: Textos adaptados a "Horarios Libres de Salas" y "Bloques"
+    st.subheader("🔓 Inventario Disponible (Horarios Libres de Salas)")
     df_lib = st.session_state["planificacion"]["salas_libres"]
     
     if not df_lib.empty:
@@ -207,7 +209,7 @@ with tab_libres:
             df_filtro_libres = df_filtro_libres[df_filtro_libres["DIA"] == f_dia]
         df_filtro_libres = df_filtro_libres[df_filtro_libres["CAPACIDAD"] >= f_cap]
         
-        st.metric("Bloques Libres Disponibles Reales", len(df_filtro_libres))
+        st.metric("Bloques Libres Reales Encontrados", len(df_filtro_libres))
         st.dataframe(df_filtro_libres.sort_values(by=["DIA", "INICIO", "SALA"]), use_container_width=True, hide_index=True)
     else:
         st.info("Ejecuta un escenario para calcular los bloques libres puros.")
