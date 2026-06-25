@@ -258,7 +258,7 @@ with tab_libres:
     
     if not df_lib.empty:
         col_f1, col_f2, col_f3 = st.columns(3)
-        f_edificio = col_f1.selectbox("Edificio:", ["TODOS"] + list(df_lib["EDIFICIO"].unique()))
+        f_edificio = col_f1.selectbox("Edificio:", ["TODOS"] + sorted(list(df_lib["EDIFICIO"].unique())))
         f_dia = col_f2.selectbox("Día de la Semana:", ["TODOS"] + list(df_lib["DIA"].unique()))
         f_cap = col_f3.number_input("Aforo Mínimo Requerido:", min_value=0, value=20, step=5)
             
@@ -269,5 +269,14 @@ with tab_libres:
             df_filtro_libres = df_filtro_libres[df_filtro_libres["DIA"] == f_dia]
         df_filtro_libres = df_filtro_libres[df_filtro_libres["CAPACIDAD"] >= f_cap]
         
-        st.metric("Bloques Libres Reales Encontrados", len(df_filtro_libres))
-        st.dataframe(df_filtro_libres.sort_values(by=["DIA", "INICIO", "SALA"]), use_container_width=True, hide_index=True)
+        # --- Completado del código cortado ---
+        st.markdown(f"**Ventanas de tiempo disponibles encontradas:** {len(df_filtro_libres)}")
+        st.dataframe(
+            df_filtro_libres[[
+                "SALA", "EDIFICIO", "CAPACIDAD", "DIA", "INICIO", "FIN", "FECHA_DISP_INI", "FECHA_DISP_FIN"
+            ]].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("💡 Ejecuta una simulación para auditar las ventanas horarias libres de la planta física.")
