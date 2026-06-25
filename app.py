@@ -126,6 +126,10 @@ if st.sidebar.button("⚡ Computar Asignación de Planta"):
                 lista_salas=salas_seleccionadas
             )
             
+            # --- TRAZA DE DEPURACIÓN DE COLUMNAS SOLICITADA ---
+            st.write("Columnas df_lib:")
+            st.write(df_lib.columns.tolist())
+            
             if not df_res.empty:
                 st.session_state["planificacion"]["df_resultado"] = df_res
                 st.session_state["planificacion"]["escenarios_config"][id_config] = {
@@ -269,14 +273,40 @@ with tab_libres:
             df_filtro_libres = df_filtro_libres[df_filtro_libres["DIA"] == f_dia]
         df_filtro_libres = df_filtro_libres[df_filtro_libres["CAPACIDAD"] >= f_cap]
         
-        # --- Completado del código cortado ---
+        # --- BLOQUE REEMPLAZADO CON CONTROL DE COLUMNAS FALTANTES ---
         st.markdown(f"**Ventanas de tiempo disponibles encontradas:** {len(df_filtro_libres)}")
-        st.dataframe(
-            df_filtro_libres[[
-                "SALA", "EDIFICIO", "CAPACIDAD", "DIA", "INICIO", "FIN", "FECHA_DISP_INI", "FECHA_DISP_FIN"
-            ]].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("💡 Ejecuta una simulación para auditar las ventanas horarias libres de la planta física.")
+
+        columnas_requeridas = [
+            "SALA",
+            "EDIFICIO",
+            "CAPACIDAD",
+            "DIA",
+            "INICIO",
+            "FIN",
+            "FECHA_DISP_INI",
+            "FECHA_DISP_FIN"
+        ]
+
+        faltantes = [c for c in columnas_requeridas if c not in df_filtro_libres.columns]
+
+        if faltantes:
+            st.error(
+                f"El motor devolvió un DataFrame sin las columnas esperadas.\n\n"
+                f"Columnas faltantes: {faltantes}"
+            )
+
+            st.write("Columnas disponibles:")
+            st.write(df_filtro_libres.columns.tolist())
+
+            st.write("Primeras filas:")
+            st.dataframe(df_filtro_libres.head())
+
+        else:
+            st.dataframe(
+                df_filtro_libres[columnas_requeridas]
+                .sort_values(
+                    by=["EDIFICIO", "SALA", "DIA", "INICIO"]
+                ),
+                use_container_width=True,
+                hide_index=True
+            )
