@@ -66,13 +66,13 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
                 score_preferencia = 3
             elif tipo_sala == "HYFLEX":
                 score_preferencia = 4
-        elif "EXAM" in tipo_reunion:
+        elif "EXAM" in tipo_reunion or "PBRA" in tipo_reunion:
             prefs = ["SALA PLANA", "STREAMING", "SALA NORMAL", "SALA TRADICIONAL"]
             if tipo_sala in prefs: score_preferencia = prefs.index(tipo_sala)
         elif "AYUD" in tipo_reunion:
             if tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]: score_preferencia = 0
             
-    # --- LÓGICA DE PREGRADO CORREGIDA ---
+    # --- LÓGICA DE PREGRADO ---
     else:  
         if "CLAS" in tipo_reunion:
             if tipo_sala == "STREAMING":
@@ -80,7 +80,6 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
             elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]:
                 score_preferencia = 1
             
-            # Validación político-institucional de edificios basada en códigos exactos
             if any(cod in materia for cod in INGENIERIAS):
                 edificios_pref = ["ING", "CIEN"]
             elif any(cod in materia for cod in ADMINISTRACION):
@@ -91,7 +90,7 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
             if edificio in edificios_pref:
                 score_edificio = edificios_pref.index(edificio)
                 
-        elif "EXAM" in tipo_reunion:
+        elif "EXAM" in tipo_reunion or "PBRA" in tipo_reunion:
             prefs = ["SALA PLANA", "STREAMING", "SALA NORMAL", "SALA TRADICIONAL"]
             if tipo_sala in prefs: score_preferencia = prefs.index(tipo_sala)
         elif "AYUD" in tipo_reunion:
@@ -179,7 +178,7 @@ def ejecutar_asignacion_escenario(
                 val = group["CUPOS"].max()
             dict_cupos_cruzados[name] = val
 
-    # Cola de prioridades corregida con las siglas institucionales explícitas
+    # Cola de prioridades
     def calc_prioridad_programa(row):
         if row["ORIGEN_BASE"] == "POSTGRADO": return 1
         mat = str(row["MATERIA"]).strip().upper()
@@ -215,7 +214,7 @@ def ejecutar_asignacion_escenario(
     conteo_asignados, conteo_rechazados = 0, 0
     salas_asignadas_cruzadas = {}
 
-    # 5. BUCLE CENTRAL ASIGNADOR
+    # 5. BUCLE CENTRAL ASIGNADOR (CON EXCLUSIÓN ESTRICTA)
     for curso in lista_cursos:
         cupos_originales = curso["CUPOS"]
         dia = curso["DIA"]
@@ -232,6 +231,18 @@ def ejecutar_asignacion_escenario(
         cruz_key = (curso[col_cruzada], dia, horario) if col_cruzada and curso[col_cruzada] != "" else None
         cupos_efectivos = dict_cupos_cruzados.get(cruz_key, cupos_originales) if cruz_key else cupos_originales
         
+        # --- FILTRO DE EXCLUSIÓN DE TIPOS ---
+        TIPOS_REQUERIDOS = ["HIBR", "CLAS", "EXAM", "PBRA", "AYUD"]
+        if not any(keyword in tipo_r for keyword in TIPOS_REQUERIDOS):
+            resultados_asignacion.append({
+                "CARRERA": materia, "NOMBRE SECCIÓN": f"{materia} SECC {seccion}",
+                "CUPOS_CONSOLIDADOS": cupos_efectivos, "DIA": dia, "HORARIO": horario,
+                "SALA": "SIN SALA", "EDIFICIO": "NINGUNO",
+                "ESTADO": "NO REQUIERE", "MOTIVO_RECHAZO": f"Excluido: Tipo '{tipo_r}' no utiliza sala física", "TIPO_REUNION": tipo_r,
+                "EFICIENCIA_ESPACIAL": 0.0
+            })
+            continue # Ignora el procesamiento y salta al siguiente sin gastar recursos
+            
         sala_asignada = None
         motivo_rechazo = "No hay salas del tipo requerido o aforo disponible en este bloque"
         
@@ -245,7 +256,6 @@ def ejecutar_asignacion_escenario(
                 umbrales_eficiencia = [eficiencia_minima] + [u for u in base_relax if u < eficiencia_minima]
                 umbrales_eficiencia = list(dict.fromkeys(umbrales_eficiencia))
                 
-            # Ordenamiento dinámico usando los códigos y grupos corregidos
             salas_candidatas = sorted(salas_universo, key=lambda s: calcular_score_sala(s, orig_base, tipo_r, materia, cupos_efectivos))
             
             flag_encontrado = False
@@ -329,18 +339,25 @@ def ejecutar_asignacion_escenario(
         df_car = pd.DataFrame(columns=["CARRERA", "HORAS_OCUPADAS"])
         df_tip = pd.DataFrame(columns=["TIPO_REUNION", "HORAS_CONSUMIDAS"])
 
-    total_cursos = len(lista_cursos)
+    # Filtrado estricto de demandantes reales para no diluir los KPIs
+    df_demandantes = df_res[df_res["ESTADO"].isin(["ASIGNADO", "SIN SALA"])]
+    total_cursos_demandantes = len(df_demandantes)
+    
     resumen_metadata = {
         "escenario": escenario_id, "asignados": conteo_asignados, "rechazados": conteo_rechazados,
-        "porcentaje_asignacion": round((conteo_asignados / total_cursos) * 100, 1) if total_cursos > 0 else 0,
+        "porcentaje_asignacion": round((conteo_asignados / total_cursos_demandantes) * 100, 1) if total_cursos_demandantes > 0 else 0,
         "salas_utilizadas": int(df_malla["SALA"].nunique())
     }
 
-    if not df_res.empty:
-        df_dem = df_res.groupby(["DIA", "HORARIO"]).size().reset_index(name="BLOQUES_ACTIVOS")
+    if not df_demandantes.empty:
+        df_dem = df_demandantes.groupby(["DIA", "HORARIO"]).size().reset_index(name="BLOQUES_ACTIVOS")
         df_dem["MOMENTO_OPERATIVO"] = df_dem["DIA"] + " " + df_dem["HORARIO"]
         df_dem["HORA_STR"] = df_dem["HORARIO"]
-        df_rech = df_res.groupby("CARRERA").agg(total_cursos=("ESTADO", "count"), sin_sala=("ESTADO", lambda x: (x == "SIN SALA").sum())).reset_index()
+        
+        df_rech = df_demandantes.groupby("CARRERA").agg(
+            total_cursos=("ESTADO", "count"), 
+            sin_sala=("ESTADO", lambda x: (x == "SIN SALA").sum())
+        ).reset_index()
         df_rech["TASA_RECHAZO_PCT"] = (df_rech["sin_sala"] / df_rech["total_cursos"]) * 100
     else:
         df_dem = pd.DataFrame(columns=["MOMENTO_OPERATIVO", "BLOQUES_ACTIVOS", "DIA", "HORA_STR"])
