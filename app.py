@@ -1,10 +1,44 @@
 import streamlit as st
 import pandas as pd
 import io
+import os
 from motor import ejecutar_asignacion_escenario
 
 st.set_page_config(layout="wide", page_title="Asignación de Salas UAndes", page_icon="🏛️")
 st.title("🏛️ Asignación de Salas UAndes")
+
+# --- CORRECCIÓN EN DISCO PARA EL MOTOR ---
+def corregir_excel_en_disco():
+    ruta = "infraestructura_constante.xlsx"
+    if os.path.exists(ruta):
+        try:
+            # Leer todas las pestañas existentes para no borrar nada
+            xl = pd.ExcelFile(ruta)
+            pestanas = {sheet: xl.parse(sheet) for sheet in xl.sheet_names}
+            
+            if "SALAS" in pestanas:
+                df = pestanas["SALAS"]
+                # Limpiar nombres de columnas
+                df.columns = [str(c).strip().upper() for c in df.columns]
+                
+                # Forzar el nombre que motor.py busca con desesperación
+                if "TIPO DE SALA" in df.columns:
+                    df = df.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
+                if "TIPO DE RESTRICCIÓN" in df.columns:
+                    df = df.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
+                
+                pestanas["SALAS"] = df
+                
+                # Guardar el archivo corregido sobreescribiendo el viejo
+                with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
+                    for sheet_name, data in pestanas.items():
+                        data.to_excel(writer, sheet_name=sheet_name, index=False)
+        except Exception as e:
+            st.warning(f"No se pudo auto-corregir el archivo físico: {e}")
+
+# Ejecutar la corrección antes de que cualquier otra cosa ocurra
+corregir_excel_en_disco()
+# ----------------------------------------
 
 if "planificacion" not in st.session_state:
     st.session_state["planificacion"] = {
