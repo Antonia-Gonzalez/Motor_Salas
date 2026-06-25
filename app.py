@@ -3,8 +3,8 @@ import pandas as pd
 import io
 from motor import ejecutar_asignacion_escenario
 
-st.set_page_config(layout="wide", page_title="BI Planta Física V2", page_icon="🏛️")
-st.title("🏛️ Sistema BI de Infraestructura Universitaria")
+st.set_page_config(layout="wide", page_title="Asingación de Salas UAndes", page_icon="🏛️")
+st.title("🏛️ Asingación de Salas UAndes")
 
 if "planificacion" not in st.session_state:
     st.session_state["planificacion"] = {
@@ -52,7 +52,7 @@ def extraer_materias_del_excel(bytes_file):
         return []
 
 st.sidebar.header("⚙️ Configuración y Filtros")
-archivo_maestro = st.sidebar.file_uploader("1️⃣ Subir Malla Académica (.xlsx)", type=["xlsx"])
+archivo_maestro = st.sidebar.file_uploader("1️⃣ Subir archivo Programaacíon académica (.xlsx)", type=["xlsx"])
 
 opciones_materias = []
 if archivo_maestro is not None:
@@ -63,7 +63,7 @@ elif st.session_state["planificacion"]["archivo_maestro_bytes"] is not None:
     opciones_materias = extraer_materias_del_excel(st.session_state["planificacion"]["archivo_maestro_bytes"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("2️⃣ Filtros de Selección Dinámica")
+st.sidebar.subheader("2️⃣ Filtros de Selección")
 
 # FILTRO DE MATERIAS ASIGNADAS
 if opciones_materias:
@@ -75,7 +75,7 @@ if opciones_materias:
     else:
         materias_seleccionadas = st.sidebar.multiselect("Filtrar materias específicas:", options=opciones_materias)
 else:
-    st.sidebar.info("💡 Sube una malla curricular para extraer las materias dinámicamente.")
+    st.sidebar.info("💡 Sube el archivo Programaxión académica.xlsx para extraer las materias dinámicamente.")
     materias_seleccionadas = []
 
 # FILTROS DE INFRAESTRUCTURA
@@ -108,13 +108,13 @@ eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 7
 modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
 modo_cruzada_sel = st.sidebar.selectbox("Agrupamiento Listas Cruzadas", ["MAXIMO", "SUMAR", "PROMEDIO"], index=0)
 
-if st.sidebar.button("⚡ Computar Asignación de Planta"):
+if st.sidebar.button("⚡ Correr programa"):
     if st.session_state["planificacion"]["archivo_maestro_bytes"] is None:
         st.sidebar.error("❌ Sube un archivo de malla académica antes de simular.")
     elif not materias_seleccionadas:
         st.sidebar.error("❌ No hay materias seleccionadas para el procesamiento.")
     else:
-        with st.spinner("Procesando balance de planta a velocidad optimizada..."):
+        with st.spinner("Procesando archivo para asignación de salas..."):
             archivo_mem = io.BytesIO(st.session_state["planificacion"]["archivo_maestro_bytes"])
             
             df_res, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
@@ -160,7 +160,7 @@ if st.session_state["planificacion"]["escenarios_metadata"]:
     st.markdown("---")
 
 tab_control, tab_analitica, tab_cuellos, tab_calendario, tab_criticos, tab_libres = st.tabs([
-    "📋 Gestión de Corridas", "📊 Planta Física", "🔥 Saturación Temporal", "📅 Matriz de Calendarios", "🚨 Control de Rechazos", "🔓 Horarios Libres de Salas"
+    "Gestión de Corridas", "Gráficos", "Saturación Temporal", "Matriz de Calendarios", "Control de Rechazos", "Horarios Libres de Salas"
 ])
 
 with tab_control:
@@ -196,7 +196,6 @@ with tab_control:
             st.rerun()
 
 with tab_analitica:
-    st.subheader("📊 Métricas de Capacidad Física")
     df_s = st.session_state["planificacion"]["metricas_salas"]
     df_e = st.session_state["planificacion"]["metricas_edificios"]
     df_tip = st.session_state["planificacion"]["met_tipos"]
@@ -204,18 +203,17 @@ with tab_analitica:
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         if not df_e.empty:
-            st.markdown("##### 🏢 Uso Real de Infraestructura por Edificio (%)")
+            st.markdown("##### Uso Real de Infraestructura por Edificio (%)")
             st.bar_chart(df_e.set_index("EDIFICIO")["% UTILIZACIÓN SEMANAL HORARIA"])
     with col_g2:
         if not df_s.empty:
-            st.markdown("##### 🏛️ Top 10 Aulas con Mayor Saturación (Horas Semanales)")
+            st.markdown("##### Top 10 Aulas con Mayor Saturación (Horas Semanales)")
             st.bar_chart(df_s.sort_values("HORAS_OCUPADAS", ascending=False).head(10).set_index("SALA")["HORAS_OCUPADAS"])
         if not df_tip.empty:
-            st.markdown("##### ⚙️ Distribución de Horas por Tipo de Reunión")
+            st.markdown("##### Distribución de Horas por Tipo de Reunión")
             st.bar_chart(df_tip.set_index("TIPO_REUNION")["HORAS_CONSUMIDAS"])
 
 with tab_cuellos:
-    st.subheader("🔥 Análisis de Presión Temporal por Momento Operativo")
     df_dem = st.session_state["planificacion"]["demanda_horaria"]
     if not df_dem.empty:
         st.line_chart(df_dem.set_index("MOMENTO_OPERATIVO")["BLOQUES_ACTIVOS"])
@@ -232,24 +230,23 @@ with tab_calendario:
         if not df_sala_filtrado.empty:
             df_pivot = pd.pivot_table(
                 df_sala_filtrado, index="HORA_INICIO", columns="DIA", values="CURSO_OCUPANTE",
-                aggfunc=lambda x: " ⚠️ COLISIÓN: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
+                aggfunc=lambda x: " ⚠️ Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
             )
             indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x, format="%H:%M").time())
             dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
-            st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("🟢 Completamente Libre"), use_container_width=True)
+            st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("🟢Libre"), use_container_width=True)
 
 with tab_criticos:
-    st.subheader("🚨 Diagnóstico Estratégico y Tasas de Rechazo")
     df_rech = st.session_state["planificacion"]["rechazos_carrera"]
     df_res_criticos = st.session_state["planificacion"]["df_resultado"]
     
     if not df_rech.empty:
-        st.markdown("##### 📈 Tasa de Rechazo de Aulas por Carrera (%)")
+        st.markdown("##### Tasa de Rechazo de Aulas por Carrera (%)")
         st.bar_chart(df_rech.set_index("CARRERA")["TASA_RECHAZO_PCT"])
         st.dataframe(df_rech, use_container_width=True, hide_index=True)
         
         st.markdown("---")
-        st.markdown("##### 🔎 Detalle de Secciones Afectadas")
+        st.markdown("##### Detalle de Secciones Afectadas")
         df_sin_sala = df_res_criticos[df_res_criticos["ESTADO"] == "SIN SALA"]
         if not df_sin_sala.empty:
             st.dataframe(df_sin_sala[["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]].drop_duplicates(), use_container_width=True, hide_index=True)
@@ -257,7 +254,6 @@ with tab_criticos:
             st.success("🏆 ¡Todos los cursos encontraron un aula compatible!")
 
 with tab_libres:
-    st.subheader("🔓 Inventario Disponible (Horarios Libres de Salas)")
     df_lib = st.session_state["planificacion"]["salas_libres"]
     
     if not df_lib.empty:
