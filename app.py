@@ -3,8 +3,8 @@ import pandas as pd
 import io
 from motor import ejecutar_asignacion_escenario
 
-st.set_page_config(layout="wide", page_title="Asingación de Salas UAndes", page_icon="🏛️")
-st.title("🏛️ Asingación de Salas UAndes")
+st.set_page_config(layout="wide", page_title="Asignación de Salas UAndes", page_icon="🏛️")
+st.title("🏛️ Asignación de Salas UAndes")
 
 if "planificacion" not in st.session_state:
     st.session_state["planificacion"] = {
@@ -19,9 +19,25 @@ if "planificacion" not in st.session_state:
 def cargar_datos_infraestructura_filtros():
     try:
         df_infra = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
+        
+        # 1. Estandarizar nombres de columnas a mayúsculas y quitar espacios extra
+        df_infra.columns = [str(c).strip().upper() for c in df_infra.columns]
+        
+        # 2. Mapear 'TIPO DE SALA' al formato 'TIPO_SALA' que requiere el motor.py
+        if "TIPO DE SALA" in df_infra.columns:
+            df_infra = df_infra.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
+        elif "TIPO_SALA" not in df_infra.columns:
+            df_infra["TIPO_SALA"] = "SALA TRADICIONAL"
+            
+        # 3. Mapear 'TIPO DE RESTRICCIÓN' por consistencia si el motor lo llega a requerir
+        if "TIPO DE RESTRICCIÓN" in df_infra.columns:
+            df_infra = df_infra.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
+
+        # 4. Limpieza de datos estándar
         df_infra["EDIFICIO"] = df_infra["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
         df_infra["SALA"] = df_infra["SALA"].fillna("").astype(str).str.strip().str.upper()
         
+        # Control de salas duplicadas basadas en la capacidad
         salas_duplicadas = df_infra[df_infra.duplicated(subset=["SALA"], keep=False)]["SALA"].unique()
         for idx, fila in df_infra.iterrows():
             s_nombre = str(fila["SALA"]).strip().upper()
@@ -31,7 +47,8 @@ def cargar_datos_infraestructura_filtros():
         edificios = sorted([e for e in df_infra["EDIFICIO"].unique() if e != ""])
         salas = sorted([s for s in df_infra["SALA"].unique() if s != ""])
         return df_infra, edificios, salas
-    except:
+    except Exception as e:
+        st.error(f"Error al cargar infraestructura: {e}")
         return pd.DataFrame(), [], []
 
 df_infra, opciones_edificios, opciones_salas = cargar_datos_infraestructura_filtros()
@@ -51,8 +68,8 @@ def extraer_materias_del_excel(bytes_file):
     except:
         return []
 
-st.sidebar.header("⚙️ Configuración y Filtros")
-archivo_maestro = st.sidebar.file_uploader("1️⃣ Subir archivo Programaacíon académica (.xlsx)", type=["xlsx"])
+st.sidebar.header("Configuración y Filtros")
+archivo_maestro = st.sidebar.file_uploader("1. Subir archivo Programación académica (.xlsx)", type=["xlsx"])
 
 opciones_materias = []
 if archivo_maestro is not None:
@@ -63,7 +80,7 @@ elif st.session_state["planificacion"]["archivo_maestro_bytes"] is not None:
     opciones_materias = extraer_materias_del_excel(st.session_state["planificacion"]["archivo_maestro_bytes"])
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("2️⃣ Filtros de Selección")
+st.sidebar.subheader("2. Filtros de Selección")
 
 # FILTRO DE MATERIAS ASIGNADAS
 if opciones_materias:
@@ -75,7 +92,7 @@ if opciones_materias:
     else:
         materias_seleccionadas = st.sidebar.multiselect("Filtrar materias específicas:", options=opciones_materias)
 else:
-    st.sidebar.info("💡 Sube el archivo Programaxión académica.xlsx para extraer las materias dinámicamente.")
+    st.sidebar.info("💡 Sube el archivo Programación académica.xlsx para extraer las materias dinámicamente.")
     materias_seleccionadas = []
 
 # FILTROS DE INFRAESTRUCTURA
@@ -101,14 +118,14 @@ else:
     salas_seleccionadas = None
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("3️⃣ Parámetros Algorítmicos")
+st.sidebar.subheader("3. Parámetros Algorítmicos")
 
 id_config = st.sidebar.text_input("Código de Corrida", value=f"RUN_{len(st.session_state['planificacion']['escenarios_metadata'])+1}")
 eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 75, step=5)
 modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
 modo_cruzada_sel = st.sidebar.selectbox("Agrupamiento Listas Cruzadas", ["MAXIMO", "SUMAR", "PROMEDIO"], index=0)
 
-if st.sidebar.button("⚡ Correr programa"):
+if st.sidebar.button("Correr programa"):
     if st.session_state["planificacion"]["archivo_maestro_bytes"] is None:
         st.sidebar.error("❌ Sube un archivo de malla académica antes de simular.")
     elif not materias_seleccionadas:
@@ -126,7 +143,7 @@ if st.sidebar.button("⚡ Correr programa"):
                 lista_salas=salas_seleccionadas
             )
             
-            # --- TRAZA DE DEPURACIÓN DE COLUMNAS SOLICITADA ---
+            # Traza temporal para verificar comportamiento de df_lib
             st.write("Columnas df_lib:")
             st.write(df_lib.columns.tolist())
             
@@ -152,7 +169,7 @@ if st.sidebar.button("⚡ Correr programa"):
 
 if st.session_state["planificacion"]["escenarios_metadata"]:
     meta_actual = st.session_state["planificacion"]["escenarios_metadata"][-1]
-    st.markdown("### 🎯 Cuadro de Mando Operativo General")
+    st.markdown("### Cuadro de Mando Operativo General")
     c1, c2, c3 = st.columns(3)
     c1.metric("Cursos Asignados con Éxito", meta_actual["asignados"])
     c2.metric("Efectividad de Asignación", f"{meta_actual['porcentaje_asignacion']}%")
@@ -169,7 +186,7 @@ with tab_control:
         opciones_eliminar = [e["escenario"] for e in st.session_state["planificacion"]["escenarios_metadata"]]
         target_eliminar = st.selectbox("Seleccione simulación a remover:", opciones_eliminar)
         
-        if st.button("🗑️ Purgar Escenario"):
+        if st.button("Purgar Escenario"):
             st.session_state["planificacion"]["escenarios_config"].pop(target_eliminar, None)
             st.session_state["planificacion"]["ocupacion"] = {}
             configs_restantes = list(st.session_state["planificacion"]["escenarios_config"].values())
@@ -220,7 +237,7 @@ with tab_cuellos:
         st.dataframe(df_dem[["DIA", "HORA_STR", "BLOQUES_ACTIVOS"]], use_container_width=True, hide_index=True)
 
 with tab_calendario:
-    st.subheader("📅 Distribución Semanal por Sala")
+    st.subheader("Distribución Semanal por Sala")
     df_malla_cal = st.session_state["planificacion"]["df_malla"]
     
     if not df_malla_cal.empty:
@@ -230,18 +247,18 @@ with tab_calendario:
         if not df_sala_filtrado.empty:
             df_pivot = pd.pivot_table(
                 df_sala_filtrado, index="HORA_INICIO", columns="DIA", values="CURSO_OCUPANTE",
-                aggfunc=lambda x: " ⚠️ Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
+                aggfunc=lambda x: " Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
             )
             indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x, format="%H:%M").time())
             dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
-            st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("🟢Libre"), use_container_width=True)
+            st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("Libre"), use_container_width=True)
 
 with tab_criticos:
     df_rech = st.session_state["planificacion"]["rechazos_carrera"]
     df_res_criticos = st.session_state["planificacion"]["df_resultado"]
     
     if not df_rech.empty:
-        st.markdown("##### Tasa de Rechazo de Aulas por Carrera (%)")
+        st.markdown("##### Tasa de Reconocimiento de Aulas por Carrera (%)")
         st.bar_chart(df_rech.set_index("CARRERA")["TASA_RECHAZO_PCT"])
         st.dataframe(df_rech, use_container_width=True, hide_index=True)
         
@@ -251,7 +268,7 @@ with tab_criticos:
         if not df_sin_sala.empty:
             st.dataframe(df_sin_sala[["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]].drop_duplicates(), use_container_width=True, hide_index=True)
         else:
-            st.success("🏆 ¡Todos los cursos encontraron un aula compatible!")
+            st.success("¡Todos los cursos encontraron un aula compatible!")
 
 with tab_libres:
     df_lib = st.session_state["planificacion"]["salas_libres"]
@@ -269,40 +286,19 @@ with tab_libres:
             df_filtro_libres = df_filtro_libres[df_filtro_libres["DIA"] == f_dia]
         df_filtro_libres = df_filtro_libres[df_filtro_libres["CAPACIDAD"] >= f_cap]
         
-        # --- BLOQUE REEMPLAZADO CON CONTROL DE COLUMNAS FALTANTES ---
         st.markdown(f"**Ventanas de tiempo disponibles encontradas:** {len(df_filtro_libres)}")
 
         columnas_requeridas = [
-            "SALA",
-            "EDIFICIO",
-            "CAPACIDAD",
-            "DIA",
-            "INICIO",
-            "FIN",
-            "FECHA_DISP_INI",
-            "FECHA_DISP_FIN"
+            "SALA", "EDIFICIO", "CAPACIDAD", "DIA", "INICIO", "FIN", "FECHA_DISP_INI", "FECHA_DISP_FIN"
         ]
 
         faltantes = [c for c in columnas_requeridas if c not in df_filtro_libres.columns]
 
         if faltantes:
-            st.error(
-                f"El motor devolvió un DataFrame sin las columnas esperadas.\n\n"
-                f"Columnas faltantes: {faltantes}"
-            )
-
-            st.write("Columnas disponibles:")
-            st.write(df_filtro_libres.columns.tolist())
-
-            st.write("Primeras filas:")
-            st.dataframe(df_filtro_libres.head())
-
+            st.error(f"El motor devolvió un DataFrame sin las columnas esperadas.\n\nColumnas faltantes: {faltantes}")
+            st.write("Columnas disponibles:", df_filtro_libres.columns.tolist())
         else:
             st.dataframe(
-                df_filtro_libres[columnas_requeridas]
-                .sort_values(
-                    by=["EDIFICIO", "SALA", "DIA", "INICIO"]
-                ),
-                use_container_width=True,
-                hide_index=True
+                df_filtro_libres[columnas_requeridas].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
+                use_container_width=True, hide_index=True
             )
