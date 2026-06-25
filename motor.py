@@ -19,10 +19,15 @@ def ejecutar_asignacion_escenario(
     lista_formatos=None,
     lista_salas=None
 ):
+    """
+    Motor de optimización espacial universitario corregido y blindado.
+    Retorna exactamente 11 dataframes y diccionarios analíticos.
+    """
     ruta_infraestructura = "infraestructura_constante.xlsx"
     dias_semana = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"]
     dias_orden = {d: i for i, d in enumerate(dias_semana, 1)}
     
+    # 1. CARGA DE INFRAESTRUCTURA CONSTANTE
     try:
         salas_PROV = pd.read_excel(ruta_infraestructura, sheet_name="SALAS")
     except Exception as e:
@@ -74,6 +79,7 @@ def ejecutar_asignacion_escenario(
             for d in dias_semana:
                 ocupacion[sala][d] = [b for b in ocupacion[sala][d] if b[8] != escenario_id]
 
+    # 2. CARGA Y PARSING DE DEMANDA ACADÉMICA
     dfs = []
     if not solo_postgrado:
         try:
@@ -83,7 +89,7 @@ def ejecutar_asignacion_escenario(
         except: pass
     if not solo_pregrado:
         try:
-            # 🛠️ CORRECCIÓN ERROR 1: Eliminado error tipográfico "POSTDRADO" -> "POSTGRADO"
+            # ✔️ CORRECCIÓN: Nombre de pestaña corregido de "POSTDRADO" a "POSTGRADO"
             df_post = pd.read_excel(archivo_cursos_excel, sheet_name="BASE POSTGRADO")
             df_post["POSTGRADO_FLAG"] = True
             dfs.append(df_post)
@@ -187,7 +193,7 @@ def ejecutar_asignacion_escenario(
                     return False
         return True
 
-    # ASIGNACIÓN MULTI-FASE
+    # 3. PROCESO DE ASIGNACIÓN MULTI-FASE
     for _, g_row in df_grupos_unicos.iterrows():
         gid = g_row["GRUPO_ID"]
         carrera = g_row["CARRERA"]
@@ -243,14 +249,14 @@ def ejecutar_asignacion_escenario(
                     fila["DIA"], fila["HORA INICIO"], fila["HORA TERMINO"],
                     fila["FECHA INICIO"], fila["FECHA TERMINO"],
                     nombre_ocupante, alumnos_grupo, cap_final, escenario_id,
-                    fila["DURACION_HORAS"], sala["EDIFICIO"], fila["CARRERA"], fila["TIPO DE REUNION"]
+                    fila["DURACION_HORAS"], mejor_sala["EDIFICIO"], fila["CARRERA"], fila["TIPO DE REUNION"]
                 ))
         else:
             base.loc[idx_filas, "ESTADO"] = "SIN SALA"
             if motivos_sala:
                 base.loc[idx_filas, "MOTIVO_RECHAZO"] = "; ".join(sorted(motivos_sala))
 
-    # FASE 2: Descompresión de Rezagados
+    # FASE 2: Cascada de Rezagados
     if not modo_estricto:
         escalones_degradados = [0.75, 0.50, 0.30, 0.10, 0.0]
         escalones_degradados = [nivel for nivel in escalones_degradados if nivel < eficiencia_minima]
@@ -307,12 +313,13 @@ def ejecutar_asignacion_escenario(
                         fila["DIA"], fila["HORA INICIO"], fila["HORA TERMINO"],
                         fila["FECHA INICIO"], fila["FECHA TERMINO"],
                         nombre_ocupante, alumnos_grupo, cap_final, escenario_id,
-                        fila["DURACION_HORAS"], sala["EDIFICIO"], fila["CARRERA"], fila["TIPO DE REUNION"]
+                        fila["DURACION_HORAS"], mejor_sala["EDIFICIO"], fila["CARRERA"], fila["TIPO DE REUNION"]
                     ))
 
     base["INICIO"] = base["FECHA INICIO"].dt.strftime('%d-%m-%Y')
     base["FIN"] = base["FECHA TERMINO"].dt.strftime('%d-%m-%Y')
 
+    # 4. CONSTRUCCIÓN DE DATASETS ANALÍTICOS
     registros_malla = []
     salas_activas_set = set()
     eficiencias_totales = []
@@ -321,10 +328,9 @@ def ejecutar_asignacion_escenario(
     for sala, dias in ocupacion.items():
         for d, bloques in dias.items():
             for b in bloques:
-                momento_key = f"{b[0]}_{b[1].strftime('%H:%M')}"
+                momento_key = f"{d}_{b[1].strftime('%H:%M')}"
                 registros_malla.append({
-                    "SALA": sala, "DIA": b[0], "HORA_INICIO": b[1].strftime('%H:%M'),
-                    "HORA_INICIO_OBJ": b[1], # 🛠️ CORRECCIÓN ERROR 4: Inyección del objeto time nativo para la app
+                    "SALA": sala, "DIA": d, "HORA_INICIO": b[1].strftime('%H:%M'),
                     "HORARIO": f"{b[1].strftime('%H:%M')} - {b[2].strftime('%H:%M')}",
                     "CURSO_OCUPANTE": b[5], "CUPOS_REALES": b[6], "CAPACIDAD_SALA": b[7], 
                     "ESCENARIO_ID": b[8], "DURACION_HORAS": b[9], "EDIFICIO": b[10],
@@ -356,10 +362,13 @@ def ejecutar_asignacion_escenario(
     df_metricas_edificios = df_metricas_salas.groupby("EDIFICIO").agg(horas_ocupadas=("HORAS_OCUPADAS", "sum"), conteo_salas=("SALA", "count")).reset_index()
     df_metricas_edificios["% UTILIZACIÓN SEMANAL HORARIA"] = round((df_metricas_edificios["horas_ocupadas"] / (df_metricas_edificios["conteo_salas"] * HORAS_MAX_SEMANAL)) * 100, 1)
 
+    # ✔️ RESTITUCIÓN DE VARIABLES DE SALIDA (Para evitar fallas de unpacking)
     if df_malla_consolidada.empty:
         df_met_carreras = pd.DataFrame(columns=["CARRERA", "HORAS_CONSUMIDAS"])
+        df_met_tipos = pd.DataFrame(columns=["TIPO_REUNION", "HORAS_CONSUMIDAS"])
     else:
         df_met_carreras = df_malla_consolidada.groupby("CARRERA")["DURACION_HORAS"].sum().reset_index().rename(columns={"DURACION_HORAS": "HORAS_CONSUMIDAS"})
+        df_met_tipos = df_malla_consolidada.groupby("TIPO_REUNION")["DURACION_HORAS"].sum().reset_index().rename(columns={"DURACION_HORAS": "HORAS_CONSUMIDAS"})
 
     df_demanda_horaria = base.groupby(["DIA", "HORA INICIO"])["GRUPO_ID"].nunique().reset_index()
     df_demanda_horaria.columns = ["DIA", "HORA_INICIO", "BLOQUES_ACTIVOS"]
@@ -382,7 +391,7 @@ def ejecutar_asignacion_escenario(
                 hi = pd.to_datetime(h_ini_str).time()
                 hf = pd.to_datetime(h_fin_str).time()
                 
-                # 🛠️ CORRECCIÓN ERROR 3: Removido el cortocircuito erróneo `b[4] < b[3]`. Bloqueo directo y limpio.
+                # ✔️ CORRECCIÓN: Estructura lógica directa y limpia sin cortocircuitos temporales
                 bloque_ocupado = False
                 for b in ocupacion[s_nom][d_inst]:
                     if (hi < b[2] and hf > b[1]):
@@ -414,5 +423,6 @@ def ejecutar_asignacion_escenario(
         "salas_utilizadas": len(salas_activas_set), "horas_ocupadas": round(horas_totales_ocupadas, 1)
     }
 
+    # ✔️ RETORNO EXACTO DE 11 ELEMENTOS TOTALMENTE ALINEADOS CON APP.PY
     return (base, ocupacion, df_malla_consolidada, resumen_escenario, df_metricas_salas, 
-            df_metricas_edificios, df_met_carreras, df_demanda_horaria, df_salas_libres, df_rechazos)
+            df_metricas_edificios, df_met_carreras, df_met_tipos, df_demanda_horaria, df_salas_libres, df_rechazos)
