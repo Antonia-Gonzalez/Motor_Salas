@@ -38,12 +38,12 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
     """
     tipo_sala = str(sala_dict["TIPO_SALA"]).strip().upper()
     edificio = str(sala_dict["EDIFICIO"]).strip().upper()
-    capacidad = sala_dict["CAPACIDAD"]
+    capacity = sala_dict["CAPACIDAD"]
     
     score_preferencia = 99
     score_edificio = 99
     
-    if capacidad < cupos:
+    if capacity < cupos:
         return (999, 999, 999) # Descalificada por aforo insuficiente
         
     # Diccionarios de asignación estricta por carrera
@@ -96,7 +96,7 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
         elif "AYUD" in tipo_reunion:
             if tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]: score_preferencia = 0
             
-    desperdicio_capacidad = capacidad - cupos
+    desperdicio_capacidad = capacity - cupos
     return (score_preferencia, score_edificio, desperdicio_capacidad)
 
 
@@ -111,6 +111,14 @@ def ejecutar_asignacion_escenario(
     except:
         df_infra = pd.DataFrame(columns=["SALA", "EDIFICIO", "CAPACIDAD", "TIPO_SALA"])
     
+    # --- NUEVA SECCIÓN DE CONTROL: Normalizar nombres de columnas físicas de Infraestructura ---
+    df_infra.columns = [str(c).strip().upper() for c in df_infra.columns]
+    if "TIPO DE SALA" in df_infra.columns:
+        df_infra = df_infra.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
+    if "TIPO DE RESTRICCIÓN" in df_infra.columns:
+        df_infra = df_infra.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
+    # ------------------------------------------------------------------------------------------
+
     df_infra["EDIFICIO"] = df_infra["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
     df_infra["SALA"] = df_infra["SALA"].fillna("").astype(str).str.strip().str.upper()
     df_infra["CAPACIDAD"] = df_infra["CAPACIDAD"].fillna(0).astype(int)
@@ -142,6 +150,10 @@ def ejecutar_asignacion_escenario(
         return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
     df_cursos = pd.concat(hojas_cargar, ignore_index=True)
+    
+    # Estandarizar también las columnas de los cursos
+    df_cursos.columns = [str(c).strip().upper() for c in df_cursos.columns]
+    
     df_cursos["MATERIA"] = df_cursos["MATERIA"].fillna("").astype(str).str.strip().str.upper()
     
     lista_carreras_caps = [str(c).strip().upper() for c in lista_carreras]
@@ -153,8 +165,20 @@ def ejecutar_asignacion_escenario(
     col_ini = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("INI" in str(c).upper() or "COM" in str(c).upper())), None)
     col_fin = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("TER" in str(c).upper() or "FIN" in str(c).upper())), None)
     
-    df_cursos["FECHA_INI_CONV"] = pd.to_datetime(df_cursos[col_ini] if col_ini else "2026-03-01", errors='coerce').dt.date.fillna(pd.to_datetime("2026-03-01").date())
-    df_cursos["FECHA_FIN_CONV"] = pd.to_datetime(df_cursos[col_fin] if col_fin else "2026-12-31", errors='coerce').dt.date.fillna(pd.to_datetime("2026-12-31").date())
+    # --- NUEVA SECCIÓN DE CONTROL: Forzar fechas a Series para evitar fallos de AttributeError con .dt ---
+    if col_ini and col_ini in df_cursos.columns:
+        fechas_ini_raw = df_cursos[col_ini]
+    else:
+        fechas_ini_raw = pd.Series("2026-03-01", index=df_cursos.index)
+
+    if col_fin and col_fin in df_cursos.columns:
+        fechas_fin_raw = df_cursos[col_fin]
+    else:
+        fechas_fin_raw = pd.Series("2026-12-31", index=df_cursos.index)
+
+    df_cursos["FECHA_INI_CONV"] = pd.to_datetime(fechas_ini_raw, errors='coerce').dt.date.fillna(pd.to_datetime("2026-03-01").date())
+    df_cursos["FECHA_FIN_CONV"] = pd.to_datetime(fechas_fin_raw, errors='coerce').dt.date.fillna(pd.to_datetime("2026-12-31").date())
+    # -----------------------------------------------------------------------------------------------------
     
     df_cursos["CUPOS"] = df_cursos["CUPOS"].fillna(0).astype(int)
     df_cursos["DIA"] = df_cursos["DIA"].fillna("S/D").astype(str).str.strip().str.upper()
@@ -241,7 +265,7 @@ def ejecutar_asignacion_escenario(
                 "ESTADO": "NO REQUIERE", "MOTIVO_RECHAZO": f"Excluido: Tipo '{tipo_r}' no utiliza sala física", "TIPO_REUNION": tipo_r,
                 "EFICIENCIA_ESPACIAL": 0.0
             })
-            continue # Ignora el procesamiento y salta al siguiente sin gastar recursos
+            continue 
             
         sala_asignada = None
         motivo_rechazo = "No hay salas del tipo requerido o aforo disponible en este bloque"
