@@ -157,7 +157,7 @@ st.sidebar.subheader("3. Parámetros Algorítmicos")
 id_config = st.sidebar.text_input("Código de Corrida", value=f"RUN_{len(st.session_state['planificacion']['escenarios_metadata'])+1}")
 eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 75, step=5)
 modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
-modo_cruzada_sel = st.sidebar.selectbox("Agrupamiento Listas Cruzadas", ["MAXIMO", "SUMAR", "PROMEDIO"], index=0)
+modo_cruzada_sel = "SUMAR"
 
 if st.sidebar.button("Correr programa"):
     if st.session_state["planificacion"]["archivo_maestro_bytes"] is None:
