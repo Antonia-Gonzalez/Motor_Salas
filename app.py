@@ -321,18 +321,38 @@ with tab_criticos:
     df_rech = st.session_state["planificacion"]["rechazos_carrera"]
     df_res_criticos = st.session_state["planificacion"]["df_resultado"]
     
-    if not df_rech.empty:
-        st.markdown("##### Tasa de Reconocimiento de Aulas por Carrera (%)")
-        st.bar_chart(df_rech.set_index("CARRERA")["TASA_RECHAZO_PCT"])
-        st.dataframe(df_rech, use_container_width=True, hide_index=True)
+    st.markdown("##### Tasa de Reconocimiento de Aulas por Carrera (%)")
+    
+    # 1. Verificamos si hay datos de rechazos para graficar
+    if df_rech is not None and not df_rech.empty:
         
-        st.markdown("---")
-        st.markdown("##### Detalle de Secciones Afectadas")
-        df_sin_sala = df_res_criticos[df_res_criticos["ESTADO"] == "SIN SALA"]
-        if not df_sin_sala.empty:
-            st.dataframe(df_sin_sala[["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]].drop_duplicates(), use_container_width=True, hide_index=True)
-        else:
-            st.success("¡Todos los cursos encontraron un aula compatible!")
+        # Sincronizamos las columnas si viene el conteo directo del motor
+        if "sin_sala" in df_rech.columns and "CARRERA" in df_rech.columns:
+            df_rech["TASA_RECHAZO_PCT"] = df_rech["sin_sala"]
+            
+        # Graficamos de manera segura
+        if "TASA_RECHAZO_PCT" in df_rech.columns:
+            st.bar_chart(df_rech.set_index("CARRERA")["TASA_RECHAZO_PCT"])
+        elif "sin_sala" in df_rech.columns:
+            st.bar_chart(df_rech.set_index("CARRERA")["sin_sala"])
+            
+        # Mostramos la tabla resumen de rechazos por carrera
+        st.dataframe(df_rech, use_container_width=True, hide_index=True)
+    else:
+        # Este else ahora sí funciona correctamente si el dataframe está vacío
+        st.success("🎉 ¡Excelente noticia! No hubo ningún curso rechazado en este escenario.")
+        
+    st.markdown("---")
+    st.markdown("##### Detalle de Secciones Afectadas")
+    
+    # 2. Mostramos el desglose de cursos que quedaron con el ESTADO "SIN SALA"
+    df_sin_sala = df_res_criticos[df_res_criticos["ESTADO"] == "SIN SALA"] if df_res_criticos is not None else pd.DataFrame()
+    
+    if not df_sin_sala.empty:
+        columnas_visibles = [col for col in ["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"] if col in df_sin_sala.columns]
+        st.dataframe(df_sin_sala[columnas_visibles].drop_duplicates(), use_container_width=True, hide_index=True)
+    else:
+        st.success("¡Todas las secciones encontraron un aula compatible!")
 
 with tab_libres:
     df_lib = st.session_state["planificacion"]["salas_libres"]
