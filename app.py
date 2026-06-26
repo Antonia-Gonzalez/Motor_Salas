@@ -12,16 +12,13 @@ def corregir_excel_en_disco():
     ruta = "infraestructura_constante.xlsx"
     if os.path.exists(ruta):
         try:
-            # Leer todas las pestañas existentes para no borrar nada
             xl = pd.ExcelFile(ruta)
             pestanas = {sheet: xl.parse(sheet) for sheet in xl.sheet_names}
             
             if "SALAS" in pestanas:
                 df = pestanas["SALAS"]
-                # Limpiar nombres de columnas
                 df.columns = [str(c).strip().upper() for c in df.columns]
                 
-                # Forzar el nombre que motor.py busca con desesperación
                 if "TIPO DE SALA" in df.columns:
                     df = df.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
                 if "TIPO DE RESTRICCIÓN" in df.columns:
@@ -29,14 +26,12 @@ def corregir_excel_en_disco():
                 
                 pestanas["SALAS"] = df
                 
-                # Guardar el archivo corregido sobreescribiendo el viejo
                 with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
                     for sheet_name, data in pestanas.items():
                         data.to_excel(writer, sheet_name=sheet_name, index=False)
         except Exception as e:
             st.warning(f"No se pudo auto-corregir el archivo físico: {e}")
 
-# Ejecutar la corrección antes de que cualquier otra cosa ocurra
 corregir_excel_en_disco()
 # ----------------------------------------
 
@@ -53,25 +48,19 @@ if "planificacion" not in st.session_state:
 def cargar_datos_infraestructura_filtros():
     try:
         df_infra = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
-        
-        # 1. Estandarizar nombres de columnas a mayúsculas y quitar espacios extra
         df_infra.columns = [str(c).strip().upper() for c in df_infra.columns]
         
-        # 2. Mapear 'TIPO DE SALA' al formato 'TIPO_SALA' que requiere el motor.py
         if "TIPO DE SALA" in df_infra.columns:
             df_infra = df_infra.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
         elif "TIPO_SALA" not in df_infra.columns:
             df_infra["TIPO_SALA"] = "SALA TRADICIONAL"
             
-        # 3. Mapear 'TIPO DE RESTRICCIÓN' por consistencia si el motor lo llega a requerir
         if "TIPO DE RESTRICCIÓN" in df_infra.columns:
             df_infra = df_infra.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
 
-        # 4. Limpieza de datos estándar
         df_infra["EDIFICIO"] = df_infra["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
         df_infra["SALA"] = df_infra["SALA"].fillna("").astype(str).str.strip().str.upper()
         
-        # Control de salas duplicadas basadas en la capacidad
         salas_duplicadas = df_infra[df_infra.duplicated(subset=["SALA"], keep=False)]["SALA"].unique()
         for idx, fila in df_infra.iterrows():
             s_nombre = str(fila["SALA"]).strip().upper()
@@ -116,7 +105,6 @@ elif st.session_state["planificacion"]["archivo_maestro_bytes"] is not None:
 st.sidebar.markdown("---")
 st.sidebar.subheader("2. Filtros de Selección")
 
-# FILTRO DE MATERIAS ASIGNADAS
 if opciones_materias:
     st.sidebar.markdown("**Materias a seleccionar**")
     seleccionar_todas_mat = st.sidebar.checkbox("Incluir todas las materias", value=True)
@@ -129,7 +117,6 @@ else:
     st.sidebar.info("💡 Sube el archivo Programación académica.xlsx para extraer las materias dinámicamente.")
     materias_seleccionadas = []
 
-# FILTROS DE INFRAESTRUCTURA
 if opciones_edificios:
     st.sidebar.markdown("**Edificios a seleccionar**")
     seleccionar_todos_edf = st.sidebar.checkbox("Incluir todos los edificios", value=True)
@@ -157,6 +144,10 @@ st.sidebar.subheader("3. Parámetros Algorítmicos")
 id_config = st.sidebar.text_input("Código de Corrida", value=f"RUN_{len(st.session_state['planificacion']['escenarios_metadata'])+1}")
 eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 75, step=5)
 modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
+
+# SOLUCIÓN PUNTO 1: Selector para decidir si heredar o limpiar ocupación previa
+limpiar_salas = st.sidebar.checkbox("🔄 Limpiar historial de salas (Corrida Limpia e Independiente)", value=True)
+
 modo_cruzada_sel = "SUMAR"
 
 if st.sidebar.button("Correr programa"):
@@ -168,18 +159,17 @@ if st.sidebar.button("Correr programa"):
         with st.spinner("Procesando archivo para asignación de salas..."):
             archivo_mem = io.BytesIO(st.session_state["planificacion"]["archivo_maestro_bytes"])
             
+            # Si el usuario quiere una corrida independiente, pasamos un diccionario vacío
+            tracking_ocupacion = {} if limpiar_salas else st.session_state["planificacion"]["ocupacion"]
+            
             df_res, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
                 archivo_cursos_excel=archivo_mem, escenario_id=id_config,
                 eficiencia_minima=eficiencia_pct / 100.0, modo_estricto=modo_estricto_bool,
-                modo_lista_cruzada=modo_cruzada_sel, ocupacion_previa=st.session_state["planificacion"]["ocupacion"],
+                modo_lista_cruzada=modo_cruzada_sel, ocupacion_previa=tracking_ocupacion,
                 lista_carreras=materias_seleccionadas,
                 lista_edificios=edificios_seleccionados,
                 lista_salas=salas_seleccionadas
             )
-            
-            # Traza temporal para verificar comportamiento de df_lib
-            st.write("Columnas df_lib:")
-            st.write(df_lib.columns.tolist())
             
             if not df_res.empty:
                 st.session_state["planificacion"]["df_resultado"] = df_res
@@ -201,23 +191,39 @@ if st.sidebar.button("Correr programa"):
                 st.success(f"Corrida '{id_config}' integrada con éxito.")
                 st.rerun()
 
+# --- INTERFAZ DE MONITOREO ---
 if st.session_state["planificacion"]["escenarios_metadata"]:
     meta_actual = st.session_state["planificacion"]["escenarios_metadata"][-1]
     st.markdown("### Cuadro de Mando Operativo General")
     
-    # 1. Calculamos el total sumando los nuevos campos analíticos que entrega el motor
-    cursos_totales_asignados = meta_actual.get("automatica", 0) + meta_actual.get("preasignados", 0)
+    col1, col2, col3 = st.columns(3)
     
-    c1, c2, c3 = st.columns(3)
+    # SOLUCIÓN PUNTO 2: KPIs dinámicos y mapeados correctamente según motor.py
+    col1.metric("Cursos Asignados con Éxito", meta_actual.get("total_asignadas", 0))
+    col2.metric("Efectividad de Asignación", f"{meta_actual.get('porcentaje_asignacion', 0)}%")
+    col3.metric("Cursos no Asignados (Rechazados)", meta_actual.get("sin_sala", 0))
     
-    # 2. Usamos la nueva variable aquí
-    c1.metric("Cursos Asignados con Éxito", cursos_totales_asignados)
+    # SOLUCIÓN PUNTO 3: Botón de Descarga unificada de Excel
+    st.markdown("#### 📥 Exportar Resultados Actuales")
     
-    # Usamos .get por seguridad para evitar que falte la clave
-    c2.metric("Efectividad de Asignación", f"{meta_actual.get('porcentaje_asignacion', 0)}%")
-    c3.metric("Salas Activas en Malla", meta_actual.get("salas_utilizadas", 0))
+    # Generamos el excel en memoria RAM
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+        st.session_state["planificacion"]["df_resultado"].to_excel(writer, sheet_name="General_Asignaciones", index=False)
+        st.session_state["planificacion"]["df_malla"].to_excel(writer, sheet_name="Malla_Asignada", index=False)
+        st.session_state["planificacion"]["metricas_salas"].to_excel(writer, sheet_name="Metricas_Salas", index=False)
+        st.session_state["planificacion"]["salas_libres"].to_excel(writer, sheet_name="Ventanas_Salas_Libres", index=False)
+        st.session_state["planificacion"]["rechazos_carrera"].to_excel(writer, sheet_name="Resumen_Rechazos", index=False)
+        
+    st.download_button(
+        label="📥 Descargar Reporte Integral en Excel (.xlsx)",
+        data=excel_buffer.getvalue(),
+        file_name=f"Reporte_Planificacion_{meta_actual.get('escenario', 'RUN')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     st.markdown("---")
 
+# --- CONTROL DE TABS ---
 tab_control, tab_analitica, tab_cuellos, tab_calendario, tab_criticos, tab_libres = st.tabs([
     "Gestión de Corridas", "Gráficos", "Saturación Temporal", "Matriz de Calendarios", "Control de Rechazos", "Horarios Libres de Salas"
 ])
@@ -261,7 +267,7 @@ with tab_analitica:
     
     col_g1, col_g2 = st.columns(2)
     with col_g1:
-        if not df_e.empty:
+        if not df_e.empty and "% UTILIZACIÓN SEMANAL HORARIA" in df_e.columns:
             st.markdown("##### Uso Real de Infraestructura por Edificio (%)")
             st.bar_chart(df_e.set_index("EDIFICIO")["% UTILIZACIÓN SEMANAL HORARIA"])
     with col_g2:
@@ -344,26 +350,3 @@ with tab_libres:
                 df_filtro_libres[columnas_requeridas].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
                 use_container_width=True, hide_index=True
             )
-
-    # =========================================================
-    # 4. EL CÓDIGO DE DESCARGA EN EXCEL (Va justo AQUÍ, al final)
-    # =========================================================
-st.write("---")
-st.write("### Exportar Resultados")
-    
-    # Creamos el archivo Excel en la memoria del servidor temporalmente
-buffer = io.BytesIO()
-with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-    df_res.to_excel(writer, sheet_name='Asignaciones_Totales', index=False)
-    df_malla.to_excel(writer, sheet_name='Malla_Exitosa', index=False)
-    df_s.to_excel(writer, sheet_name='Metricas_Salas', index=False)
-    df_lib.to_excel(writer, sheet_name='Horarios_Libres', index=False)
-    df_rech_df.to_excel(writer, sheet_name='Cursos_Rechazados', index=False)
-    
-    # Le mostramos el botón físico de descarga al usuario en la web
-st.download_button(
-    label="📥 Descargar Reporte Completo en Excel",
-    data=buffer.getvalue(),
-    file_name=f"Reporte_Planificacion_{resumen_metadata['escenario']}.xlsx",
-    mime="application/vnd.ms-excel"
-)
