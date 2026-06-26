@@ -293,13 +293,29 @@ with tab_calendario:
         df_sala_filtrado = df_malla_cal[df_malla_cal["SALA"] == sala_seleccionada]
         
         if not df_sala_filtrado.empty:
-            df_pivot = pd.pivot_table(
-                df_sala_filtrado, index="HORA_INICIO", columns="DIA", values="CURSO_OCUPANTE",
-                aggfunc=lambda x: " Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
-            )
-            indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x, format="%H:%M").time())
-            dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
-            st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("Libre"), use_container_width=True)
+            # --- SOLUCIÓN ADAPTADA PARA TU CALENDARIO ---
+            col_hora = "HORARIO"
+            col_dia = "DIA"
+            col_texto = "NOMBRE SECCIÓN" if "NOMBRE SECCIÓN" in df_sala_filtrado.columns else "CARRERA"
+
+            try:
+                # Creamos la tabla pivote con las columnas reales del motor
+                df_pivot = pd.pivot_table(
+                    df_sala_filtrado, index=col_hora, columns=col_dia, values=col_texto,
+                    aggfunc=lambda x: " Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
+                )
+                
+                # Ordenamiento cronológico de las horas (usando el inicio del bloque)
+                indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x.split("-")[0].strip(), format="%H:%M").time())
+                
+                # Ordenamiento de los días de la semana
+                dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
+                
+                # Renderizamos en Streamlit rellenando los vacíos con "Libre"
+                st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("Libre"), use_container_width=True)
+                
+            except Exception as e:
+                st.warning("No se pudo estructurar el calendario visual para esta sala debido a la estructura de sus horarios.")
 
 with tab_criticos:
     df_rech = st.session_state["planificacion"]["rechazos_carrera"]
