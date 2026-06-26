@@ -171,15 +171,16 @@ def ejecutar_asignacion_escenario(
     df_cursos["DIA"] = df_cursos["DIA"].fillna("S/D").astype(str).str.strip().str.upper()
     df_cursos["HORARIO"] = df_cursos["HORARIO"].fillna("S/H").astype(str).str.strip().str.upper()
     df_cursos["TIPO_REUNION"] = df_cursos["TIPO_REUNION"].fillna("CLAS").astype(str).str.strip().str.upper()
-    # Detectar si viene como 'SALA' y renombrarla al estándar interno 'SALAS'
+    
+    # --- SOLUCIÓN DE COLUMNA SINGULAR/PLURAL ---
     if "SALA" in df_cursos.columns and "SALAS" not in df_cursos.columns:
         df_cursos = df_cursos.rename(columns={"SALA": "SALAS"})
         
-    # Por seguridad, si de todas formas no existe ninguna de las dos, la creamos vacía
     if "SALAS" not in df_cursos.columns:
         df_cursos["SALAS"] = ""
     else:
         df_cursos["SALAS"] = df_cursos["SALAS"].fillna("").astype(str).str.strip().str.upper()
+        
     col_cruzada = next((c for c in df_cursos.columns if "CRUZ" in str(c).upper() or "COMPART" in str(c).upper()), None)
     dict_cupos_cruzados = {}
     if col_cruzada and modo_lista_cruzada:
@@ -198,45 +199,38 @@ def ejecutar_asignacion_escenario(
     df_cursos["ID_CURSO_INTERNO"] = range(len(df_cursos))
 
     # =====================================================
-    # FASE 1: CÁCULO DE DIFICULTAD, RAREZA Y CACHÉ DE SCORES [PUNTO 4, 5 Y 7]
+    # FASE 1: CÁCULO DE DIFICULTAD, RAREZA Y CACHÉ DE SCORES
     # =====================================================
     lista_pre_cursos = df_cursos.to_dict("records")
     for c in lista_pre_cursos:
         c_key = (c[col_cruzada], c["DIA"], c["HORARIO"]) if col_cruzada and c[col_cruzada] != "" else None
         c_cupos = dict_cupos_cruzados.get(c_key, c["CUPOS"]) if c_key else c["CUPOS"]
         
-        # Rareza: ¿Cuántas salas soportan este volumen de alumnos?
         salas_compatibles = sum(1 for s in salas_universo if s["CAPACIDAD"] >= c_cupos)
         c["RAREZA_SALAS"] = salas_compatibles if salas_compatibles > 0 else 0.1
         
-        # Factor Horario Crítico (Viernes tarde o bloques de alta demanda)
         es_critico = 2 if c["DIA"] in ["VIERNES", "SABADO"] and parse_horario_range(c["HORARIO"])[0] >= 1000 else 1
-        
-        # [PUNTO 4 Y 5] Dificultad combinatoria del curso
         c["DIFICULTAD_COMBINATORIA"] = (c_cupos / c["RAREZA_SALAS"]) * es_critico
 
     df_cursos = pd.DataFrame(lista_pre_cursos)
     df_cursos["PRIORIDAD_PROG"] = df_cursos.apply(lambda r: 1 if r["ORIGEN_BASE"] == "POSTGRADO" else 2, axis=1)
     df_cursos["PRIORIDAD_TIPO"] = df_cursos["TIPO_REUNION"].apply(prioridad_tipo)
 
-    # Ordenamiento Científico Multicriterio de la Fase 1
     df_cursos = df_cursos.sort_values(
         by=["PRIORIDAD_PROG", "PRIORIDAD_TIPO", "DIFICULTAD_COMBINATORIA", "CUPOS"], 
         ascending=[True, True, False, False]
     )
     lista_cursos = df_cursos.to_dict("records")
 
-    # Inicialización de matrices de tracking de infraestructura
     matriz_ocupacion = {}
     contador_carga_salas = {s["SALA"]: 0 for s in salas_universo}
-    contador_carga_edificios = {s["EDIFICIO"]: 0 for s in salas_universo} # [PUNTO 6] Tracker Global Edificios
+    contador_carga_edificios = {s["EDIFICIO"]: 0 for s in salas_universo} 
     
     if ocupacion_previa and isinstance(ocupacion_previa, dict):
         for k, v in ocupacion_previa.items():
             if isinstance(k, tuple) and len(k) == 2:
                 matriz_ocupacion[k] = list(v)
                 contador_carga_salas[k[0]] = contador_carga_salas.get(k[0], 0) + len(v)
-                # Recuperar edificio mapeado
                 ed_map = next((s["EDIFICIO"] for s in salas_universo if s["SALA"] == k[0]), "EXTERNA")
                 contador_carga_edificios[ed_map] = contador_carga_edificios.get(ed_map, 0) + len(v)
 
@@ -275,7 +269,6 @@ def ejecutar_asignacion_escenario(
             }
             continue
 
-        # --- PREASIGNACIONES MANUALES ---
         if sala_fija != "" and sala_fija != "NAN":
             asigs_sala_fija = matriz_ocupacion.get((sala_fija, dia), [])
             if verificar_colision(start_min, end_min, start_date, end_date, asigs_sala_fija):
@@ -304,7 +297,6 @@ def ejecutar_asignacion_escenario(
                 "INTENTOS_BUSQUEDA": 1, "ID_CURSO": cid, "CURSO_DICT": curso
             }
             
-        # --- PROCESO DE ASIGNACIÓN AUTOMÁTICA ---
         else:
             sala_asignada = None
             intentos = 0
@@ -316,10 +308,8 @@ def ejecutar_asignacion_escenario(
                 if not verificar_colision(start_min, end_min, start_date, end_date, asigs_cruz):
                     sala_asignada = sala_tmp
             else:
-                # [PUNTO 7] Filtrado veloz de aforo inicial para optimizar complejidad temporal
                 salas_validas = [s for s in salas_universo if s["CAPACIDAD"] >= cupos_efectivos]
                 
-                # [PUNTO 1 Y 7] Evaluación por Costo Linealizado Unificado
                 salas_candidatas = sorted(
                     salas_validas,
                     key=lambda s: calcular_score_sala_lineal(
@@ -364,9 +354,8 @@ def ejecutar_asignacion_escenario(
                 }
 
     # =====================================================
-    # FASE 3: OPTIMIZACIÓN LOCAL Y REPARACIÓN RECURSIVA (BACKTRACKING) [PUNTO 2, 3 Y 8]
+    # FASE 3: OPTIMIZACIÓN LOCAL Y REPARACIÓN RECURSIVA
     # =====================================================
-    # Buscamos cursos rechazados e intentamos hacer swaps/desplazamientos de colisión
     for cid, res in list(resultados_asignacion.items()):
         if res["ESTADO"] != "SIN SALA": continue
         
@@ -378,25 +367,21 @@ def ejecutar_asignacion_escenario(
         st_date, ed_date = curso_r["FECHA_INI_CONV"], curso_r["FECHA_FIN_CONV"]
         
         reubicado = False
-        # Buscamos salas candidatas ideales para romper el bloqueo
         salas_potenciales = [s for s in salas_universo if s["CAPACIDAD"] >= cupos_r]
         
         for sala_p in salas_potenciales:
             asigs_actuales = matriz_ocupacion.get((sala_p["SALA"], dia_r), [])
             
-            # Identificamos qué cursos están estorbando en ese bloque
             cursos_obstaculo = []
             for a_st, a_ed, a_sd, a_ed_date, obs_id in asigs_actuales:
                 if max(st_date, a_sd) <= min(ed_date, a_ed_date) and max(st_min, a_st) < min(ed_min, a_ed):
                     cursos_obstaculo.append(obs_id)
             
-            # Si solo hay 1 curso obstaculizando y es automático (reubicable), intentamos desplazarlo
             if len(cursos_obstaculo) == 1:
                 obs_id = cursos_obstaculo[0]
                 res_obs = resultados_asignacion.get(obs_id)
                 
                 if res_obs and res_obs["TIPO_ASIGNACION"] == "AUTOMÁTICA":
-                    # Intentamos buscarle una NUEVA sala vacía al curso obstáculo para liberar espacio
                     curso_obs_dict = res_obs["CURSO_DICT"]
                     obs_st, obs_ed = parse_horario_range(res_obs["HORARIO"])
                     obs_sd, obs_ed_d = curso_obs_dict["FECHA_INI_CONV"], curso_obs_dict["FECHA_FIN_CONV"]
@@ -407,14 +392,9 @@ def ejecutar_asignacion_escenario(
                             
                         asigs_escape = matriz_ocupacion.get((sala_escape["SALA"], dia_r), [])
                         if not verificar_colision(obs_st, obs_ed, obs_sd, obs_ed_d, asigs_escape):
-                            # ¡BINGO! El curso obstáculo puede moverse a 'sala_escape'
-                            # 1. Remover obstáculo de la sala original
                             matriz_ocupacion[(sala_p["SALA"], dia_r)] = [a for a in asigs_actuales if a[4] != obs_id]
-                            
-                            # 2. Insertar obstáculo en su sala de escape
                             matriz_ocupacion.setdefault((sala_escape["SALA"], dia_r), []).append((obs_st, obs_ed, obs_sd, obs_ed_d, obs_id))
                             
-                            # 3. Actualizar datos del obstáculo
                             contador_carga_salas[sala_p["SALA"]] -= 1
                             contador_carga_salas[sala_escape["SALA"]] += 1
                             resultados_asignacion[obs_id].update({
@@ -422,7 +402,6 @@ def ejecutar_asignacion_escenario(
                                 "EFICIENCIA_ESPACIAL": res_obs["CUPOS_CONSOLIDADOS"] / sala_escape["CAPACIDAD"]
                             })
                             
-                            # 4. Asignar el curso rechazado original a la sala liberada
                             matriz_ocupacion.setdefault((sala_p["SALA"], dia_r), []).append((st_min, ed_min, st_date, ed_date, cid))
                             contador_carga_salas[sala_p["SALA"]] += 1
                             
@@ -442,13 +421,12 @@ def ejecutar_asignacion_escenario(
     df_res = pd.DataFrame(lista_final_res)
     df_malla = df_res[df_res["ESTADO"] == "ASIGNADO"].copy()
     
-    # Contadores de metadatos globales
     conteo_pre = sum(1 for x in lista_final_res if "PREASIGNADA" in x["TIPO_ASIGNACION"])
     conteo_auto = sum(1 for x in lista_final_res if "AUTOMÁTICA" in x["TIPO_ASIGNACION"])
     conteo_rech = sum(1 for x in lista_final_res if x["ESTADO"] == "SIN SALA")
     conteo_err_p = sum(1 for x in lista_final_res if x["ESTADO"] == "ERROR PREASIGNADA")
 
-    horarios_unicos = df_res["HORARIO"].unique()
+    horarios_unicos = df_res["HORARIO"].unique() if not df_res.empty else []
     bloques_totales = sorted(list(set([tuple(h.split("-")) for h in horarios_unicos if "-" in h])), key=lambda x: parse_time_to_minutes(x[0]))
     if not bloques_totales: bloques_totales = [("08:30", "10:00"), ("10:15", "11:45"), ("12:00", "13:30"), ("14:30", "16:00")]
     
@@ -461,7 +439,7 @@ def ejecutar_asignacion_escenario(
         occ = len(df_s_asig)
         metricas_salas.append({
             "SALA": sala["SALA"], "EDIFICIO": sala["EDIFICIO"], "CAPACIDAD": sala["CAPACIDAD"],
-            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, capacidad_semanal - occ),
+            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, capacity_semanal - occ),
             "EFICIENCIA_PROMEDIO": df_s_asig["EFICIENCIA_ESPACIAL"].dropna().mean() if occ > 0 else 0.0
         })
     df_s = pd.DataFrame(metricas_salas)
@@ -469,8 +447,16 @@ def ejecutar_asignacion_escenario(
     df_e = df_s.groupby("EDIFICIO")["HORAS_OCUPADAS"].sum().reset_index() if not df_s.empty else pd.DataFrame(columns=["EDIFICIO", "HORAS_OCUPADAS"])
     df_car = df_malla.groupby("CARRERA").size().reset_index(name="HORAS_OCUPADAS") if not df_malla.empty else pd.DataFrame()
     df_tip = df_malla.groupby("TIPO_REUNION").size().reset_index(name="HORAS_CONSUMIDAS") if not df_malla.empty else pd.DataFrame()
-    df_dem = df_res.groupby(["DIA", "HORARIO"]).size().reset_index(name="BLOQUES_ACTIVOS") if not df_res.empty else pd.DataFrame()
     df_rech_df = df_res[df_res["ESTADO"] == "SIN SALA"].groupby("CARRERA").size().reset_index(name="sin_sala") if not df_res.empty else pd.DataFrame()
+
+    # --- CORRECCIÓN CRÍTICA DE LA COLUMNA MOMENTO_OPERATIVO ---
+    if not df_res.empty:
+        df_dem = df_res.groupby(["DIA", "HORARIO"]).size().reset_index(name="BLOQUES_ACTIVOS")
+        # Creamos explícitamente el campo combinado que app.py necesita para indexar el gráfico
+        df_dem["MOMENTO_OPERATIVO"] = df_dem["DIA"] + " " + df_dem["HORARIO"]
+        df_dem["HORA_STR"] = df_dem["HORARIO"]
+    else:
+        df_dem = pd.DataFrame(columns=["DIA", "HORARIO", "BLOQUES_ACTIVOS", "MOMENTO_OPERATIVO", "HORA_STR"])
 
     # O(1) Inventario de salas libres optimizado
     lista_libres = []
@@ -517,10 +503,10 @@ def ejecutar_asignacion_escenario(
         "escenario": escenario_id,
         "manuales": conteo_pre,
         "automaticas": conteo_auto,
-        "total_asignadas": conteo_pre + conteo_auto,   # <-- Cursos asignados con éxito
-        "sin_sala": conteo_rech,                       # <-- Cursos que no se pudieron asignar
+        "total_asignadas": conteo_pre + conteo_auto,
+        "sin_sala": conteo_rech,
         "errores_preasignacion": conteo_err_p,
-        "porcentaje_asignacion": round(((conteo_auto + conteo_pre) / len(df_res)) * 100, 1) if len(df_res) > 0 else 0, # <-- Efectividad
+        "porcentaje_asignacion": round(((conteo_auto + conteo_pre) / len(df_res)) * 100, 1) if len(df_res) > 0 else 0,
         "salas_utilizadas": int(df_malla["SALA"].nunique()) if not df_malla.empty else 0
     }
 
