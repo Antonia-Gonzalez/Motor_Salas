@@ -204,10 +204,18 @@ if st.sidebar.button("Correr programa"):
 if st.session_state["planificacion"]["escenarios_metadata"]:
     meta_actual = st.session_state["planificacion"]["escenarios_metadata"][-1]
     st.markdown("### Cuadro de Mando Operativo General")
+    
+    # 1. Calculamos el total sumando los nuevos campos analíticos que entrega el motor
+    cursos_totales_asignados = meta_actual.get("automatica", 0) + meta_actual.get("preasignados", 0)
+    
     c1, c2, c3 = st.columns(3)
-    c1.metric("Cursos Asignados con Éxito", meta_actual["asignados"])
-    c2.metric("Efectividad de Asignación", f"{meta_actual['porcentaje_asignacion']}%")
-    c3.metric("Salas Activas en Malla", meta_actual["salas_utilizadas"])
+    
+    # 2. Usamos la nueva variable aquí
+    c1.metric("Cursos Asignados con Éxito", cursos_totales_asignados)
+    
+    # Usamos .get por seguridad para evitar que falte la clave
+    c2.metric("Efectividad de Asignación", f"{meta_actual.get('porcentaje_asignacion', 0)}%")
+    c3.metric("Salas Activas en Malla", meta_actual.get("salas_utilizadas", 0))
     st.markdown("---")
 
 tab_control, tab_analitica, tab_cuellos, tab_calendario, tab_criticos, tab_libres = st.tabs([
