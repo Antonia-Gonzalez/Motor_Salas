@@ -143,7 +143,19 @@ def ejecutar_asignacion_escenario(
     df_cursos = pd.concat(hojas_cargar, ignore_index=True)
     df_cursos.columns = [str(c).strip().upper() for c in df_cursos.columns]
 
-    # --- TU BLOQUE DE TRANSFORMACIÓN DE ANCHO A LARGO (Ubicado justo antes de limpiar CUPOS) ---
+    # --- 1. HOMOLOGACIÓN DE COLUMNAS SEGÚN TU NUEVO FORMATO ---
+    df_cursos.rename(columns={
+        "CARRERA": "MATERIA",
+        "NOMBRE SECCIÓN": "SECCION", # Por si acaso conviven ambos
+        "TITULO": "SECCION",
+        "TIPO": "TIPO_REUNION",
+        "INICIO": "FECHA_INICIO",
+        "FIN": "FECHA_FIN",
+        "CAPACIDAD SALA": "CAPACIDAD",
+        "MAX ALUMNOS": "CUPOS"
+    }, inplace=True)
+
+    # --- 2. TRANSFORMACIÓN DE FORMATO ANCHO A FORMATO LARGO (DÍAS SEMANALES) ---
     dias_semana = ["LUNES", "MARTES", "MIERCOLES", "MIÉRCOLES", "JUEVES", "VIERNES", "SABADO", "SÁBADO"]
     dias_existentes = [d for d in dias_semana if d in df_cursos.columns]
 
@@ -159,13 +171,12 @@ def ejecutar_asignacion_escenario(
                     horario = str(horario).strip()
                     if horario != "" and horario.lower() != "nan":
                         nuevo = datos_base.copy()
-                        # Normalizar el día de la semana quitando acentos
+                        # Normalizar el día eliminando tildes
                         nuevo["DIA"] = dia.replace("Á", "A").replace("É", "E")
                         nuevo["HORARIO"] = horario
                         registros.append(nuevo)
 
         df_cursos = pd.DataFrame(registros)
-    # ------------------------------------------------------------------------------------------
 
     if df_cursos.empty:
         return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
