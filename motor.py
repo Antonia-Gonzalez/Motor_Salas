@@ -510,10 +510,10 @@ def ejecutar_asignacion_escenario(
         "escenario": escenario_id,
         "manuales": conteo_pre,
         "automaticas": conteo_auto,
-        "total_asignadas": conteo_pre + conteo_auto,
-        "sin_sala": conteo_rech,
+        "total_asignadas": conteo_pre + conteo_auto,   # <-- Cursos asignados con éxito
+        "sin_sala": conteo_rech,                       # <-- Cursos que no se pudieron asignar
         "errores_preasignacion": conteo_err_p,
-        "porcentaje_asignacion": round(((conteo_auto + conteo_pre) / len(df_res)) * 100, 1) if len(df_res) > 0 else 0,
+        "porcentaje_asignacion": round(((conteo_auto + conteo_pre) / len(df_res)) * 100, 1) if len(df_res) > 0 else 0, # <-- Efectividad
         "salas_utilizadas": int(df_malla["SALA"].nunique()) if not df_malla.empty else 0
     }
 
