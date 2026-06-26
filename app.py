@@ -344,25 +344,26 @@ with tab_libres:
                 df_filtro_libres[columnas_requeridas].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
                 use_container_width=True, hide_index=True
             )
+
     # =========================================================
     # 4. EL CÓDIGO DE DESCARGA EN EXCEL (Va justo AQUÍ, al final)
     # =========================================================
-    st.write("---")
-    st.write("### Exportar Resultados")
+st.write("---")
+st.write("### Exportar Resultados")
     
     # Creamos el archivo Excel en la memoria del servidor temporalmente
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_res.to_excel(writer, sheet_name='Asignaciones_Totales', index=False)
-        df_malla.to_excel(writer, sheet_name='Malla_Exitosa', index=False)
-        df_s.to_excel(writer, sheet_name='Metricas_Salas', index=False)
-        df_lib.to_excel(writer, sheet_name='Horarios_Libres', index=False)
-        df_rech_df.to_excel(writer, sheet_name='Cursos_Rechazados', index=False)
+buffer = io.BytesIO()
+with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    df_res.to_excel(writer, sheet_name='Asignaciones_Totales', index=False)
+    df_malla.to_excel(writer, sheet_name='Malla_Exitosa', index=False)
+    df_s.to_excel(writer, sheet_name='Metricas_Salas', index=False)
+    df_lib.to_excel(writer, sheet_name='Horarios_Libres', index=False)
+    df_rech_df.to_excel(writer, sheet_name='Cursos_Rechazados', index=False)
     
     # Le mostramos el botón físico de descarga al usuario en la web
-    st.download_button(
-        label="📥 Descargar Reporte Completo en Excel",
-        data=buffer.getvalue(),
-        file_name=f"Reporte_Planificacion_{resumen_metadata['escenario']}.xlsx",
-        mime="application/vnd.ms-excel"
-    )
+st.download_button(
+    label="📥 Descargar Reporte Completo en Excel",
+    data=buffer.getvalue(),
+    file_name=f"Reporte_Planificacion_{resumen_metadata['escenario']}.xlsx",
+    mime="application/vnd.ms-excel"
+)
