@@ -439,7 +439,7 @@ def ejecutar_asignacion_escenario(
         occ = len(df_s_asig)
         metricas_salas.append({
             "SALA": sala["SALA"], "EDIFICIO": sala["EDIFICIO"], "CAPACIDAD": sala["CAPACIDAD"],
-            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, capacity_semanal - occ),
+            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, capacidad_semanal - occ),
             "EFICIENCIA_PROMEDIO": df_s_asig["EFICIENCIA_ESPACIAL"].dropna().mean() if occ > 0 else 0.0
         })
     df_s = pd.DataFrame(metricas_salas)
