@@ -12,26 +12,26 @@ def parse_time_to_minutes(time_str):
     except:
         return 0
 
-# --- TU NUEVA FUNCIÓN OPTIMIZADA POR SEGURIDAD ---
-def parse_horario_range(horario_str):
-    try:
-        horario_str = str(horario_str).strip()
-        
-        # Reemplazos exhaustivos para limpiar guiones y espacios en el formato '13:30 -15:20'
-        horario_str = horario_str.replace(" – ", "-")
-        horario_str = horario_str.replace("–", "-")
-        horario_str = horario_str.replace(" - ", "-")
-        horario_str = horario_str.replace(" -", "-")
-        horario_str = horario_str.replace("- ", "-")
-        
-        partes = horario_str.split("-")
-        
-        if len(partes) == 2:
-            inicio = parse_time_to_minutes(partes[0])
-            fin = parse_time_to_minutes(partes[1])
-            return inicio, fin
-            
+def parse_horario_range(horario):
+    """Parsea rangos horarios reales con espacios, guiones largos o variados."""
+    if pd.isna(horario):
         return 0, 0
+    try:
+        horario = str(horario).strip()
+        horario = horario.replace("–", "-")
+        horario = horario.replace("—", "-")
+        horario = horario.replace(" - ", "-")
+        horario = horario.replace("- ", "-")
+        horario = horario.replace(" -", "-")
+        
+        partes = horario.split("-")
+        if len(partes) != 2:
+            return 0, 0
+            
+        return (
+            parse_time_to_minutes(partes[0]),
+            parse_time_to_minutes(partes[1])
+        )
     except:
         return 0, 0
 
@@ -44,19 +44,17 @@ def verificar_colision(start_min, end_min, start_date, end_date, asignaciones_sa
     return False
 
 def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
-    """
-    Calcula la idoneidad exacta de la sala bajo las reglas institucionales.
-    """
+    """Calcula la idoneidad exacta de la sala bajo las reglas institucionales."""
     tipo_sala = str(sala_dict["TIPO_SALA"]).strip().upper()
     edificio = str(sala_dict["EDIFICIO"]).strip().upper()
     capacity = sala_dict["CAPACIDAD"]
     
-    score_preferencia = 99
-    score_edificio = 99
-    
     if capacity < cupos:
         return (999, 999, 999)
         
+    score_preferencia = 99
+    score_edificio = 99
+    
     INGENIERIAS = ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"]
     ADMINISTRACION = ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"]
     
@@ -143,19 +141,25 @@ def ejecutar_asignacion_escenario(
     df_cursos = pd.concat(hojas_cargar, ignore_index=True)
     df_cursos.columns = [str(c).strip().upper() for c in df_cursos.columns]
 
-    # --- 1. HOMOLOGACIÓN DE COLUMNAS SEGÚN TU NUEVO FORMATO ---
+    # --- HOMOLOGACIÓN TOTAL DE COLUMNAS RECOMENDADA ---
     df_cursos.rename(columns={
         "CARRERA": "MATERIA",
-        "NOMBRE SECCIÓN": "SECCION", # Por si acaso conviven ambos
+        "MATERIA": "MATERIA",
         "TITULO": "SECCION",
+        "NOMBRE SECCIÓN": "SECCION",
         "TIPO": "TIPO_REUNION",
+        "TIPO DE REUNIÓN": "TIPO_REUNION",
         "INICIO": "FECHA_INICIO",
+        "FECHA INICIO": "FECHA_INICIO",
         "FIN": "FECHA_FIN",
+        "FECHA FIN": "FECHA_FIN",
+        "MAX ALUMNOS": "CUPOS",
+        "CUPOS": "CUPOS",
         "CAPACIDAD SALA": "CAPACIDAD",
-        "MAX ALUMNOS": "CUPOS"
+        "CAPACIDAD": "CAPACIDAD"
     }, inplace=True)
 
-    # --- 2. TRANSFORMACIÓN DE FORMATO ANCHO A FORMATO LARGO (DÍAS SEMANALES) ---
+    # --- TRANSFORMACIÓN DINÁMICA DE ANCHO A LARGO ---
     dias_semana = ["LUNES", "MARTES", "MIERCOLES", "MIÉRCOLES", "JUEVES", "VIERNES", "SABADO", "SÁBADO"]
     dias_existentes = [d for d in dias_semana if d in df_cursos.columns]
 
@@ -171,7 +175,6 @@ def ejecutar_asignacion_escenario(
                     horario = str(horario).strip()
                     if horario != "" and horario.lower() != "nan":
                         nuevo = datos_base.copy()
-                        # Normalizar el día eliminando tildes
                         nuevo["DIA"] = dia.replace("Á", "A").replace("É", "E")
                         nuevo["HORARIO"] = horario
                         registros.append(nuevo)
@@ -182,23 +185,20 @@ def ejecutar_asignacion_escenario(
         return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df_cursos["MATERIA"] = df_cursos["MATERIA"].fillna("").astype(str).str.strip().str.upper()
-    
     lista_carreras_caps = [str(c).strip().upper() for c in lista_carreras]
     df_cursos = df_cursos[df_cursos["MATERIA"].isin(lista_carreras_caps)]
     
     if df_cursos.empty:
         return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    col_ini = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("INI" in str(c).upper() or "COM" in str(c).upper())), None)
-    col_fin = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("TER" in str(c).upper() or "FIN" in str(c).upper())), None)
-    
-    if col_ini and col_ini in df_cursos.columns:
-        fechas_ini_raw = df_cursos[col_ini]
+    # --- ASIGNACIÓN DIRECTA DE FECHAS HOMOLOGADAS ---
+    if "FECHA_INICIO" in df_cursos.columns:
+        fechas_ini_raw = df_cursos["FECHA_INICIO"]
     else:
         fechas_ini_raw = pd.Series("2026-03-01", index=df_cursos.index)
 
-    if col_fin and col_fin in df_cursos.columns:
-        fechas_fin_raw = df_cursos[col_fin]
+    if "FECHA_FIN" in df_cursos.columns:
+        fechas_fin_raw = df_cursos["FECHA_FIN"]
     else:
         fechas_fin_raw = pd.Series("2026-12-31", index=df_cursos.index)
 
@@ -210,7 +210,12 @@ def ejecutar_asignacion_escenario(
     df_cursos["HORARIO"] = df_cursos["HORARIO"].fillna("S/H").astype(str).str.strip().str.upper()
     df_cursos["TIPO_REUNION"] = df_cursos["TIPO_REUNION"].fillna("CLAS").astype(str).str.strip().str.upper()
 
-    # 3. MANEJO DE LISTAS CRUZADAS (Ajustado con la regla de SUMAR fija pedida anteriormente)
+    # --- NORMALIZACIÓN DE LA COLUMNA SALAS ---
+    if "SALAS" not in df_cursos.columns:
+        df_cursos["SALAS"] = ""
+    df_cursos["SALAS"] = df_cursos["SALAS"].fillna("").astype(str).str.strip().str.upper()
+
+    # 3. MANEJO DE LISTAS CRUZADAS
     col_cruzada = next((c for c in df_cursos.columns if "CRUZ" in str(c).upper() or "COMPART" in str(c).upper()), None)
     dict_cupos_cruzados = {}
     if col_cruzada and modo_lista_cruzada:
@@ -227,7 +232,7 @@ def ejecutar_asignacion_escenario(
                 val = group["CUPOS"].sum()
             dict_cupos_cruzados[name] = val
 
-    # Cola de prioridades
+    # Priorización de procesamiento
     def calc_prioridad_programa(row):
         if row["ORIGEN_BASE"] == "POSTGRADO": return 1
         mat = str(row["MATERIA"]).strip().upper()
@@ -258,18 +263,20 @@ def ejecutar_asignacion_escenario(
                 matriz_ocupacion[k] = list(v)
 
     resultados_asignacion = []
-    conteo_asignados, conteo_rechazados = 0, 0
+    conteo_preasignadas, conteo_automatica, conteo_rechazados = 0, 0, 0
     salas_asignadas_cruzadas = {}
 
-    # 5. BUCLE CENTRAL ASIGNADOR
+    # 5. BUCLE CENTRAL ASIGNADOR UNIFICADO
     for curso in lista_cursos:
         cupos_originales = curso["CUPOS"]
         dia = curso["DIA"]
         horario = curso["HORARIO"]
         materia = curso["MATERIA"]
         tipo_r = curso["TIPO_REUNION"]
-        seccion = curso.get("SECCION", "UNICA")
+        seccion = str(curso.get("SECCION", "UNICA")).strip()
         orig_base = curso["ORIGEN_BASE"]
+        
+        sala_fija = str(curso.get("SALAS", "")).strip().upper()
         
         start_min, end_min = parse_horario_range(horario)
         start_date = curso["FECHA_INI_CONV"]
@@ -278,79 +285,114 @@ def ejecutar_asignacion_escenario(
         cruz_key = (curso[col_cruzada], dia, horario) if col_cruzada and curso[col_cruzada] != "" else None
         cupos_efectivos = dict_cupos_cruzados.get(cruz_key, cupos_originales) if cruz_key else cupos_originales
         
+        # Validar si requiere sala física (solo si no viene preasignada)
         TIPOS_REQUERIDOS = ["HIBR", "CLAS", "EXAM", "PBRA", "AYUD"]
-        if not any(keyword in tipo_r for keyword in TIPOS_REQUERIDOS):
+        if sala_fija == "" and not any(keyword in tipo_r for keyword in TIPOS_REQUERIDOS):
             resultados_asignacion.append({
-                "CARRERA": materia, "NOMBRE SECCIÓN": f"{materia} SECC {seccion}",
+                "CARRERA": materia, "NOMBRE SECCIÓN": seccion,
                 "CUPOS_CONSOLIDADOS": cupos_efectivos, "DIA": dia, "HORARIO": horario,
                 "SALA": "SIN SALA", "EDIFICIO": "NINGUNO",
-                "ESTADO": "NO REQUIERE", "MOTIVO_RECHAZO": f"Excluido: Tipo '{tipo_r}' no utiliza sala física", "TIPO_REUNION": tipo_r,
+                "ESTADO": "NO REQUIERE", "TIPO_ASIGNACION": "SIN SALA",
+                "MOTIVO_RECHAZO": f"Excluido: Tipo '{tipo_r}' no utiliza sala física", "TIPO_REUNION": tipo_r,
                 "EFICIENCIA_ESPACIAL": 0.0
             })
             continue 
-            
-        sala_asignada = None
-        motivo_rechazo = "No hay salas del tipo requerido o aforo disponible en este bloque"
-        
-        if cruz_key and cruz_key in salas_asignadas_cruzadas:
-            sala_asignada = salas_asignadas_cruzadas[cruz_key]
-        else:
-            if modo_estricto:
-                umbrales_eficiencia = [eficiencia_minima]
-            else:
-                base_relax = [0.75, 0.50, 0.30, 0.10, 0.00]
-                umbrales_eficiencia = [eficiencia_minima] + [u for u in base_relax if u < eficiencia_minima]
-                umbrales_eficiencia = list(dict.fromkeys(umbrales_eficiencia))
-                
-            salas_candidatas = sorted(salas_universo, key=lambda s: calcular_score_sala(s, orig_base, tipo_r, materia, cupos_efectivos))
-            
-            flag_encontrado = False
-            for umbral in umbrales_eficiencia:
-                for sala in salas_candidatas:
-                    if sala["CAPACIDAD"] < cupos_efectivos: continue
-                    eficiencia_calc = cupos_efectivos / sala["CAPACIDAD"] if sala["CAPACIDAD"] > 0 else 0
-                    if eficiencia_calc < umbral: continue
-                        
-                    asigs_actuales = matriz_ocupacion.get((sala["SALA"], dia), [])
-                    if verificar_colision(start_min, end_min, start_date, end_date, asigs_actuales):
-                        motivo_rechazo = "Conflicto de horario parcial o cruce de semanas calendario"
-                        continue
-                        
-                    sala_asignada = sala
-                    flag_encontrado = True
-                    if cruz_key: salas_asignadas_cruzadas[cruz_key] = sala
-                    break
-                if flag_encontrado: break
 
+        # --- UNIFICACIÓN DE ORIGEN DE SALA ---
+        if sala_fija != "" and sala_fija != "NAN":
+            sala_asignada = {
+                "SALA": sala_fija,
+                "EDIFICIO": "ASIGNADA MANUAL",
+                "CAPACIDAD": cupos_originales
+            }
+            tipo_asignacion_str = "PREASIGNADA"
+            motivo_rechazo = "N/A"
+            conteo_preasignadas += 1
+        else:
+            sala_asignada = None
+            tipo_asignacion_str = "AUTOMÁTICA"
+            motivo_rechazo = "No hay salas del tipo requerido o aforo disponible en este bloque"
+            
+            if cruz_key and cruz_key in salas_asignadas_cruzadas:
+                sala_asignada = salas_asignadas_cruzadas[cruz_key]
+            else:
+                if modo_estricto:
+                    umbrales_eficiencia = [eficiencia_minima]
+                else:
+                    base_relax = [0.75, 0.50, 0.30, 0.10, 0.00]
+                    umbrales_eficiencia = [eficiencia_minima] + [u for u in base_relax if u < eficiencia_minima]
+                    umbrales_eficiencia = list(dict.fromkeys(umbrales_eficiencia))
+                    
+                salas_candidatas = sorted(salas_universo, key=lambda s: calcular_score_sala(s, orig_base, tipo_r, materia, cupos_efectivos))
+                
+                flag_encontrado = False
+                for umbral in umbrales_eficiencia:
+                    for sala in salas_candidatas:
+                        if sala["CAPACIDAD"] < cupos_efectivos: continue
+                        eficiencia_calc = cupos_efectivos / sala["CAPACIDAD"] if sala["CAPACIDAD"] > 0 else 0
+                        if eficiencia_calc < umbral: continue
+                            
+                        asigs_actuales = matriz_ocupacion.get((sala["SALA"], dia), [])
+                        if verificar_colision(start_min, end_min, start_date, end_date, asigs_actuales):
+                            motivo_rechazo = "Conflicto de horario o la sala ya está ocupada/reservada"
+                            continue
+                            
+                        sala_asignada = sala
+                        flag_encontrado = True
+                        if cruz_key: salas_asignadas_cruzadas[cruz_key] = sala
+                        break
+                    if flag_encontrado: break
+                
+                if sala_asignada:
+                    conteo_automatica += 1
+                else:
+                    conteo_rechazados += 1
+
+        # --- PERSISTENCIA IGUALADA PARA AMBOS ORÍGENES ---
         if sala_asignada:
             llave_matriz = (sala_asignada["SALA"], dia)
-            if llave_matriz not in matriz_ocupacion: matriz_ocupacion[llave_matriz] = []
+            if llave_matriz not in matriz_ocupacion: 
+                matriz_ocupacion[llave_matriz] = []
+            
             matriz_ocupacion[llave_matriz].append((start_min, end_min, start_date, end_date, f"{materia}-{seccion}"))
             
-            conteo_asignados += 1
             resultados_asignacion.append({
-                "CARRERA": materia, "NOMBRE SECCIÓN": f"{materia} SECC {seccion}",
+                "CARRERA": materia, "NOMBRE SECCIÓN": seccion,
                 "CUPOS_CONSOLIDADOS": cupos_efectivos, "DIA": dia, "HORARIO": horario,
                 "SALA": sala_asignada["SALA"], "EDIFICIO": sala_asignada["EDIFICIO"],
-                "ESTADO": "ASIGNADO", "MOTIVO_RECHAZO": "N/A", "TIPO_REUNION": tipo_r,
+                "ESTADO": "ASIGNADO", "TIPO_ASIGNACION": tipo_asignacion_str, 
+                "MOTIVO_RECHAZO": "N/A", "TIPO_REUNION": tipo_r,
                 "EFICIENCIA_ESPACIAL": cupos_efectivos / sala_asignada["CAPACIDAD"] if sala_asignada["CAPACIDAD"] > 0 else 0
             })
         else:
-            conteo_rechazados += 1
             resultados_asignacion.append({
-                "CARRERA": materia, "NOMBRE SECCIÓN": f"{materia} SECC {seccion}",
+                "CARRERA": materia, "NOMBRE SECCIÓN": seccion,
                 "CUPOS_CONSOLIDADOS": cupos_efectivos, "DIA": dia, "HORARIO": horario,
                 "SALA": "SIN SALA", "EDIFICIO": "NINGUNO",
-                "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": motivo_rechazo, "TIPO_REUNION": tipo_r,
+                "ESTADO": "SIN SALA", "TIPO_ASIGNACION": "SIN SALA", 
+                "MOTIVO_RECHAZO": motivo_rechazo, "TIPO_REUNION": tipo_r,
                 "EFICIENCIA_ESPACIAL": 0.0
             })
 
-    # 6. RETORNO Y MÉTRICAS COMPATIBLES
+    # 6. RETORNO Y BLOQUES HORARIOS TOTALMENTE DINÁMICOS
     df_res = pd.DataFrame(resultados_asignacion)
     df_malla = df_res[df_res["ESTADO"] == "ASIGNADO"].copy()
     
-    bloques_totales = [("08:30", "10:00"), ("10:15", "11:45"), ("12:00", "13:30"), ("14:30", "16:00"), ("16:15", "17:45")]
-    dias_totales = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES"]
+    # Construcción dinámica de bloques horarios desde los datos reales del Excel
+    horarios_unicos = df_res["HORARIO"].unique()
+    bloques_totales = []
+    for h in horarios_unicos:
+        h_clean = str(h).replace(" ", "")
+        if "-" in h_clean and h_clean != "S/H":
+            partes = h_clean.split("-")
+            if len(partes) == 2:
+                bloques_totales.append((partes[0], partes[1]))
+    
+    bloques_totales = sorted(list(set(bloques_totales)), key=lambda x: parse_time_to_minutes(x[0]))
+    if not bloques_totales:
+        bloques_totales = [("08:30", "10:00"), ("10:15", "11:45"), ("12:00", "13:30"), ("14:30", "16:00"), ("16:15", "17:45")]
+
+    dias_totales = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] # Sábado salvado e incluido
     capacidad_bloques_semana = len(bloques_totales) * len(dias_totales)
 
     metricas_salas = []
@@ -370,7 +412,9 @@ def ejecutar_asignacion_escenario(
         df_malla["HORA_INICIO"] = df_malla["HORARIO"].apply(lambda x: x.split("-")[0].strip() if "-" in x else "08:00")
         df_malla["CURSO_OCUPANTE"] = df_malla["NOMBRE SECCIÓN"]
         df_e = df_s.groupby("EDIFICIO")["HORAS_OCUPADAS"].sum().reset_index()
-        df_e["% UTILIZACIÓN SEMANAL HORARIA"] = (df_e["HORAS_OCUPADAS"] / (df_s.groupby("EDIFICIO")["SALA"].count().values * capacidad_bloques_semana)) * 100
+        df_e["% UTILIZACIÓN SEMANAL HORARIA"] = df_e.apply(
+            lambda r: (r["HORAS_OCUPADAS"] / (max(1, len(df_s[df_s["EDIFICIO"] == r["EDIFICIO"]])) * capacidad_bloques_semana)) * 100, axis=1
+        )
         df_car = df_malla.groupby("CARRERA").size().reset_index(name="HORAS_OCUPADAS")
         df_tip = df_malla.groupby("TIPO_REUNION").size().reset_index(name="HORAS_CONSUMIDAS")
     else:
@@ -382,9 +426,13 @@ def ejecutar_asignacion_escenario(
     df_demandantes = df_res[df_res["ESTADO"].isin(["ASIGNADO", "SIN SALA"])]
     total_cursos_demandantes = len(df_demandantes)
     
+    # Metadata refinada estadísticamente
     resumen_metadata = {
-        "escenario": escenario_id, "asignados": conteo_asignados, "rechazados": conteo_rechazados,
-        "porcentaje_asignacion": round((conteo_asignados / total_cursos_demandantes) * 100, 1) if total_cursos_demandantes > 0 else 0,
+        "escenario": escenario_id, 
+        "preasignados": conteo_preasignadas,
+        "automatica": conteo_automatica, 
+        "rechazados": conteo_rechazados,
+        "porcentaje_asignacion": round(((conteo_automatica + conteo_preasignadas) / total_cursos_demandantes) * 100, 1) if total_cursos_demandantes > 0 else 0,
         "salas_utilizadas": int(df_malla["SALA"].nunique())
     }
 
@@ -402,6 +450,7 @@ def ejecutar_asignacion_escenario(
         df_dem = pd.DataFrame(columns=["MOMENTO_OPERATIVO", "BLOQUES_ACTIVOS", "DIA", "HORA_STR"])
         df_rech = pd.DataFrame(columns=["CARRERA", "TASA_RECHAZO_PCT"])
 
+    # Inventario dinámico de salas libres adaptativo
     lista_libres = []
     fecha_base_ini = pd.to_datetime("2026-03-01").date()
     fecha_base_fin = pd.to_datetime("2026-12-31").date()
