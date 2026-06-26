@@ -171,8 +171,15 @@ def ejecutar_asignacion_escenario(
     df_cursos["DIA"] = df_cursos["DIA"].fillna("S/D").astype(str).str.strip().str.upper()
     df_cursos["HORARIO"] = df_cursos["HORARIO"].fillna("S/H").astype(str).str.strip().str.upper()
     df_cursos["TIPO_REUNION"] = df_cursos["TIPO_REUNION"].fillna("CLAS").astype(str).str.strip().str.upper()
-    df_cursos["SALA"] = df_cursos.get("SALA", "").fillna("").astype(str).str.strip().str.upper()
-
+    # Detectar si viene como 'SALA' y renombrarla al estándar interno 'SALAS'
+    if "SALA" in df_cursos.columns and "SALAS" not in df_cursos.columns:
+        df_cursos = df_cursos.rename(columns={"SALA": "SALAS"})
+        
+    # Por seguridad, si de todas formas no existe ninguna de las dos, la creamos vacía
+    if "SALAS" not in df_cursos.columns:
+        df_cursos["SALAS"] = ""
+    else:
+        df_cursos["SALAS"] = df_cursos["SALAS"].fillna("").astype(str).str.strip().str.upper()
     col_cruzada = next((c for c in df_cursos.columns if "CRUZ" in str(c).upper() or "COMPART" in str(c).upper()), None)
     dict_cupos_cruzados = {}
     if col_cruzada and modo_lista_cruzada:
