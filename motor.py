@@ -171,7 +171,7 @@ def ejecutar_asignacion_escenario(
     df_cursos["DIA"] = df_cursos["DIA"].fillna("S/D").astype(str).str.strip().str.upper()
     df_cursos["HORARIO"] = df_cursos["HORARIO"].fillna("S/H").astype(str).str.strip().str.upper()
     df_cursos["TIPO_REUNION"] = df_cursos["TIPO_REUNION"].fillna("CLAS").astype(str).str.strip().str.upper()
-    df_cursos["SALAS"] = df_cursos.get("SALAS", "").fillna("").astype(str).str.strip().str.upper()
+    df_cursos["SALA"] = df_cursos.get("SALA", "").fillna("").astype(str).str.strip().str.upper()
 
     col_cruzada = next((c for c in df_cursos.columns if "CRUZ" in str(c).upper() or "COMPART" in str(c).upper()), None)
     dict_cupos_cruzados = {}
