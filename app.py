@@ -1,388 +1,150 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import io
 import os
+
+# Importación unificada del cerebro lógico
 from motor import ejecutar_asignacion_escenario
 
-st.set_page_config(layout="wide", page_title="Asignación de Salas UAndes", page_icon="🏛️")
-st.title("🏛️ Asignación de Salas UAndes")
-
-# --- CORRECCIÓN EN DISCO PARA EL MOTOR ---
-def corregir_excel_en_disco():
-    ruta = "infraestructura_constante.xlsx"
-    if os.path.exists(ruta):
-        try:
-            xl = pd.ExcelFile(ruta)
-            pestanas = {sheet: xl.parse(sheet) for sheet in xl.sheet_names}
-            
-            if "SALAS" in pestanas:
-                df = pestanas["SALAS"]
-                df.columns = [str(c).strip().upper() for c in df.columns]
-                
-                if "TIPO DE SALA" in df.columns:
-                    df = df.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
-                if "TIPO DE RESTRICCIÓN" in df.columns:
-                    df = df.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
-                
-                pestanas["SALAS"] = df
-                
-                with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
-                    for sheet_name, data in pestanas.items():
-                        data.to_excel(writer, sheet_name=sheet_name, index=False)
-        except Exception as e:
-            st.warning(f"No se pudo auto-corregir el archivo físico: {e}")
-
-corregir_excel_en_disco()
-# ----------------------------------------
+st.set_page_config(layout="wide", page_title="🏛️ Sistema de Planificación", page_icon="🏛️")
+st.title("🏛️ Sistema Profesional de Asignación de Salas")
 
 if "planificacion" not in st.session_state:
-    st.session_state["planificacion"] = {
-        "df_resultado": pd.DataFrame(), "ocupacion": {}, "df_malla": pd.DataFrame(),
-        "escenarios_metadata": [], "escenarios_config": {}, "archivo_maestro_bytes": None,
-        "metricas_salas": pd.DataFrame(), "metricas_edificios": pd.DataFrame(),
-        "met_carreras": pd.DataFrame(), "met_tipos": pd.DataFrame(), 
-        "demanda_horaria": pd.DataFrame(), "salas_libres": pd.DataFrame(), "rechazos_carrera": pd.DataFrame()
-    }
+    st.session_state["planificacion"] = None
 
-@st.cache_data
-def cargar_datos_infraestructura_filtros():
-    try:
-        df_infra = pd.read_excel("infraestructura_constante.xlsx", sheet_name="SALAS")
-        df_infra.columns = [str(c).strip().upper() for c in df_infra.columns]
-        
-        if "TIPO DE SALA" in df_infra.columns:
-            df_infra = df_infra.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
-        elif "TIPO_SALA" not in df_infra.columns:
-            df_infra["TIPO_SALA"] = "SALA TRADICIONAL"
-            
-        if "TIPO DE RESTRICCIÓN" in df_infra.columns:
-            df_infra = df_infra.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
+# =========================================================
+# CONFIGURACIÓN Y PARÁMETROS INTERACTIVOS (SIDEBAR)
+# =========================================================
+st.sidebar.header("⚙️ Parámetros del Motor")
+id_config = st.sidebar.text_input("ID de Planificación", value="ESC-2026")
 
-        df_infra["EDIFICIO"] = df_infra["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
-        df_infra["SALA"] = df_infra["SALA"].fillna("").astype(str).str.strip().str.upper()
-        
-        salas_duplicadas = df_infra[df_infra.duplicated(subset=["SALA"], keep=False)]["SALA"].unique()
-        for idx, fila in df_infra.iterrows():
-            s_nombre = str(fila["SALA"]).strip().upper()
-            if s_nombre in salas_duplicadas:
-                df_infra.at[idx, "SALA"] = f"{s_nombre} {int(fila['CAPACIDAD'])}"
-                
-        edificios = sorted([e for e in df_infra["EDIFICIO"].unique() if e != ""])
-        salas = sorted([s for s in df_infra["SALA"].unique() if s != ""])
-        return df_infra, edificios, salas
-    except Exception as e:
-        st.error(f"Error al cargar infraestructura: {e}")
-        return pd.DataFrame(), [], []
+tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
+st.sidebar.caption("💡 100%: Filtro estricto de cercanía. 60%: Permite ubicar en cualquier edificio secundario disponible.")
 
-df_infra, opciones_edificios, opciones_salas = cargar_datos_infraestructura_filtros()
-
-@st.cache_data
-def extraer_materias_del_excel(bytes_file):
-    try:
-        xl = pd.ExcelFile(io.BytesIO(bytes_file))
-        materias = set()
-        for sheet in ["BASE PREGRADO", "BASE POSTGRADO"]:
-            if sheet in xl.sheet_names:
-                df = xl.parse(sheet)
-                if "MATERIA" in df.columns:
-                    valores = df["MATERIA"].dropna().astype(str).str.strip().str.upper().unique()
-                    materias.update(valores)
-        return sorted(list(materias))
-    except:
-        return []
-
-st.sidebar.header("Configuración y Filtros")
-archivo_maestro = st.sidebar.file_uploader("1. Subir archivo Programación académica (.xlsx)", type=["xlsx"])
-
-opciones_materias = []
-if archivo_maestro is not None:
-    bytes_maestro = archivo_maestro.getvalue()
-    st.session_state["planificacion"]["archivo_maestro_bytes"] = bytes_maestro
-    opciones_materias = extraer_materias_del_excel(bytes_maestro)
-elif st.session_state["planificacion"]["archivo_maestro_bytes"] is not None:
-    opciones_materias = extraer_materias_del_excel(st.session_state["planificacion"]["archivo_maestro_bytes"])
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("2. Filtros de Selección")
-
-if opciones_materias:
-    st.sidebar.markdown("**Materias a seleccionar**")
-    seleccionar_todas_mat = st.sidebar.checkbox("Incluir todas las materias", value=True)
-    if seleccionar_todas_mat:
-        materias_seleccionadas = opciones_materias
-        st.sidebar.caption(f"✓ Listas las {len(opciones_materias)} materias detectadas.")
-    else:
-        materias_seleccionadas = st.sidebar.multiselect("Filtrar materias específicas:", options=opciones_materias)
+# Carga automática transparente del inventario físico base
+ruta_infra = "data/infraestructura_constante.xlsx"
+if os.path.exists(ruta_infra):
+    df_infra = pd.read_excel(ruta_infra)
+    salas_seleccionadas = df_infra.to_dict("records")
+    st.sidebar.success(f"✅ {len(salas_seleccionadas)} salas cargadas desde la base de datos.")
 else:
-    st.sidebar.info("💡 Sube el archivo Programación académica.xlsx para extraer las materias dinámicamente.")
-    materias_seleccionadas = []
+    st.sidebar.error(f"❌ Falta el archivo crítico de infraestructura en '{ruta_infra}'")
+    salas_seleccionadas = []
 
-if opciones_edificios:
-    st.sidebar.markdown("**Edificios a seleccionar**")
-    seleccionar_todos_edf = st.sidebar.checkbox("Incluir todos los edificios", value=True)
-    edificios_seleccionados = None if seleccionar_todos_edf else st.sidebar.multiselect("Filtrar edificios:", options=opciones_edificios)
-else:
-    edificios_seleccionados = None
+# =========================================================
+# FLUJO DE ENTRADA DE DATOS Y PROCESAMIENTO
+# =========================================================
+archivo_mem = st.file_uploader("📂 Subir Programación Académica Semanal (.xlsx)", type=["xlsx"])
 
-if opciones_salas:
-    st.sidebar.markdown("**Salas a seleccionar**")
-    seleccionar_todas_sal = st.sidebar.checkbox("Incluir todas las salas", value=True)
-    if seleccionar_todas_sal:
-        salas_seleccionadas = None
-    else:
-        if edificios_seleccionados:
-            salas_disponibles = sorted(df_infra[df_infra["EDIFICIO"].isin(edificios_seleccionados)]["SALA"].unique().tolist())
-        else:
-            salas_disponibles = opciones_salas
-        salas_seleccionadas = st.sidebar.multiselect("Filtrar salas específicas:", options=salas_disponibles)
-else:
-    salas_seleccionadas = None
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("3. Parámetros Algorítmicos")
-
-id_config = st.sidebar.text_input("Código de Corrida", value=f"RUN_{len(st.session_state['planificacion']['escenarios_metadata'])+1}")
-eficiencia_pct = st.sidebar.slider("Exigencia Eficiencia Mínima (%)", 0, 100, 75, step=5)
-modo_estricto_bool = st.sidebar.checkbox("Desactivar Cascada (Modo Estricto)", value=False)
-
-# SOLUCIÓN PUNTO 1: Selector para decidir si heredar o limpiar ocupación previa
-limpiar_salas = st.sidebar.checkbox("🔄 Limpiar historial de salas (Corrida Limpia e Independiente)", value=True)
-
-modo_cruzada_sel = "SUMAR"
-
-if st.sidebar.button("Correr programa"):
-    if st.session_state["planificacion"]["archivo_maestro_bytes"] is None:
-        st.sidebar.error("❌ Sube un archivo de malla académica antes de simular.")
-    elif not materias_seleccionadas:
-        st.sidebar.error("❌ No hay materias seleccionadas para el procesamiento.")
-    else:
-        with st.spinner("Procesando archivo para asignación de salas..."):
-            archivo_mem = io.BytesIO(st.session_state["planificacion"]["archivo_maestro_bytes"])
-            
-            # Si el usuario quiere una corrida independiente, pasamos un diccionario vacío
-            tracking_ocupacion = {} if limpiar_salas else st.session_state["planificacion"]["ocupacion"]
-            
-            df_res, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
-                archivo_cursos_excel=archivo_mem, escenario_id=id_config,
-                eficiencia_minima=eficiencia_pct / 100.0, modo_estricto=modo_estricto_bool,
-                modo_lista_cruzada=modo_cruzada_sel, ocupacion_previa=tracking_ocupacion,
-                lista_carreras=materias_seleccionadas,
-                lista_edificios=edificios_seleccionados,
-                lista_salas=salas_seleccionadas
-            )
-            
-            if not df_res.empty:
-                st.session_state["planificacion"]["df_resultado"] = df_res
-                st.session_state["planificacion"]["escenarios_config"][id_config] = {
-                    "escenario_id": id_config, "eficiencia": eficiencia_pct / 100.0,
-                    "modo_estricto": modo_estricto_bool, "modo_cruzada": modo_cruzada_sel, 
-                    "carreras": materias_seleccionadas, "edificios": edificios_seleccionados, "salas": salas_seleccionadas
-                }
-                st.session_state["planificacion"]["ocupacion"] = nueva_oc
-                st.session_state["planificacion"]["df_malla"] = df_malla
-                st.session_state["planificacion"]["escenarios_metadata"].append(resumen)
-                st.session_state["planificacion"]["metricas_salas"] = df_s
-                st.session_state["planificacion"]["metricas_edificios"] = df_e
-                st.session_state["planificacion"]["met_carreras"] = df_car
-                st.session_state["planificacion"]["met_tipos"] = df_tip
-                st.session_state["planificacion"]["demanda_horaria"] = df_dem
-                st.session_state["planificacion"]["salas_libres"] = df_lib
-                st.session_state["planificacion"]["rechazos_carrera"] = df_rech
-                st.success(f"Corrida '{id_config}' integrada con éxito.")
-                st.rerun()
-
-# --- INTERFAZ DE MONITOREO ---
-if st.session_state["planificacion"]["escenarios_metadata"]:
-    meta_actual = st.session_state["planificacion"]["escenarios_metadata"][-1]
-    st.markdown("### Cuadro de Mando Operativo General")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    # SOLUCIÓN PUNTO 2: KPIs dinámicos y mapeados correctamente según motor.py
-    col1.metric("Cursos Asignados con Éxito", meta_actual.get("total_asignadas", 0))
-    col2.metric("Efectividad de Asignación", f"{meta_actual.get('porcentaje_asignacion', 0)}%")
-    col3.metric("Cursos no Asignados (Rechazados)", meta_actual.get("sin_sala", 0))
-    
-    # SOLUCIÓN PUNTO 3: Botón de Descarga unificada de Excel
-    st.markdown("#### 📥 Exportar Resultados Actuales")
-    
-    # Generamos el excel en memoria RAM
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-        st.session_state["planificacion"]["df_resultado"].to_excel(writer, sheet_name="General_Asignaciones", index=False)
-        st.session_state["planificacion"]["df_malla"].to_excel(writer, sheet_name="Malla_Asignada", index=False)
-        st.session_state["planificacion"]["metricas_salas"].to_excel(writer, sheet_name="Metricas_Salas", index=False)
-        st.session_state["planificacion"]["salas_libres"].to_excel(writer, sheet_name="Ventanas_Salas_Libres", index=False)
-        st.session_state["planificacion"]["rechazos_carrera"].to_excel(writer, sheet_name="Resumen_Rechazos", index=False)
-        
-    st.download_button(
-        label="📥 Descargar Reporte Integral en Excel (.xlsx)",
-        data=excel_buffer.getvalue(),
-        file_name=f"Reporte_Planificacion_{meta_actual.get('escenario', 'RUN')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-    st.markdown("---")
-
-# --- CONTROL DE TABS ---
-tab_control, tab_analitica, tab_cuellos, tab_calendario, tab_criticos, tab_libres = st.tabs([
-    "Gestión de Corridas", "Gráficos", "Saturación Temporal", "Matriz de Calendarios", "Control de Rechazos", "Horarios Libres de Salas"
-])
-
-with tab_control:
-    if st.session_state["planificacion"]["escenarios_metadata"]:
-        st.dataframe(pd.DataFrame(st.session_state["planificacion"]["escenarios_metadata"]), use_container_width=True, hide_index=True)
-        opciones_eliminar = [e["escenario"] for e in st.session_state["planificacion"]["escenarios_metadata"]]
-        target_eliminar = st.selectbox("Seleccione simulación a remover:", opciones_eliminar)
-        
-        if st.button("Purgar Escenario"):
-            st.session_state["planificacion"]["escenarios_config"].pop(target_eliminar, None)
-            st.session_state["planificacion"]["ocupacion"] = {}
-            configs_restantes = list(st.session_state["planificacion"]["escenarios_config"].values())
-            st.session_state["planificacion"]["escenarios_metadata"] = []
-            
-            for cfg in configs_restantes:
-                archivo_re = io.BytesIO(st.session_state["planificacion"]["archivo_maestro_bytes"])
-                _, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
-                    archivo_cursos_excel=archivo_re, escenario_id=cfg["escenario_id"],
-                    eficiencia_minima=cfg["eficiencia"], modo_estricto=cfg["modo_estricto"],
-                    modo_lista_cruzada=cfg["modo_cruzada"], ocupacion_previa=st.session_state["planificacion"]["ocupacion"],
-                    lista_carreras=cfg["carreras"], lista_edificios=cfg.get("edificios", None), lista_salas=cfg.get("salas", None)
+if archivo_mem and salas_seleccionadas:
+    if st.button("🚀 Inicializar Optimización Global"):
+        with st.spinner("El motor de asignación está analizando las restricciones y penalizaciones temporales..."):
+            try:
+                # LLAMADA LIMPIA BAJO EL CONTRATO DE 11 VARIABLES
+                df_res, nueva_oc, df_malla, resumen, df_s, df_e, df_car, df_tip, df_dem, df_lib, df_rech = ejecutar_asignacion_escenario(
+                    archivo_cursos_excel=archivo_mem,
+                    escenario_id=id_config,
+                    lista_salas=salas_seleccionadas,
+                    relax_level=tasa_relax
                 )
-                st.session_state["planificacion"]["ocupacion"] = nueva_oc
-                st.session_state["planificacion"]["df_malla"] = df_malla
-                st.session_state["planificacion"]["escenarios_metadata"].append(resumen)
-                st.session_state["planificacion"]["metricas_salas"] = df_s
-                st.session_state["planificacion"]["metricas_edificios"] = df_e
-                st.session_state["planificacion"]["met_carreras"] = df_car
-                st.session_state["planificacion"]["met_tipos"] = df_tip
-                st.session_state["planificacion"]["demanda_horaria"] = df_dem
-                st.session_state["planificacion"]["salas_libres"] = df_lib
-                st.session_state["planificacion"]["rechazos_carrera"] = df_rech
-            st.rerun()
+                
+                # Almacenamiento seguro e inmutable en persistencia de sesión
+                st.session_state["planificacion"] = {
+                    "malla": df_res, "metadata": resumen, "salas": df_s, "rechazos": df_rech
+                }
+                st.success("¡Asignación calculada óptimamente!")
+            except Exception as e:
+                st.error(f"Error crítico en el acoplamiento de datos: {str(e)}")
 
-with tab_analitica:
-    df_s = st.session_state["planificacion"]["metricas_salas"]
-    df_e = st.session_state["planificacion"]["metricas_edificios"]
-    df_tip = st.session_state["planificacion"]["met_tipos"]
+# =========================================================
+# CAPA 5: INTERFAZ GRÁFICA EXCLUSIVA DE USUARIO (RENDERS)
+# =========================================================
+if st.session_state["planificacion"] is not None:
+    plan = st.session_state["planificacion"]
+    meta = plan["metadata"]
+    df_res_main = plan["malla"]
     
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        if not df_e.empty and "% UTILIZACIÓN SEMANAL HORARIA" in df_e.columns:
-            st.markdown("##### Uso Real de Infraestructura por Edificio (%)")
-            st.bar_chart(df_e.set_index("EDIFICIO")["% UTILIZACIÓN SEMANAL HORARIA"])
-    with col_g2:
-        if not df_s.empty:
-            st.markdown("##### Top 10 Aulas con Mayor Saturación (Horas Semanales)")
-            st.bar_chart(df_s.sort_values("HORAS_OCUPADAS", ascending=False).head(10).set_index("SALA")["HORAS_OCUPADAS"])
-        if not df_tip.empty:
-            st.markdown("##### Distribución de Horas por Tipo de Reunión")
-            st.bar_chart(df_tip.set_index("TIPO_REUNION")["HORAS_CONSUMIDAS"])
-
-with tab_cuellos:
-    df_dem = st.session_state["planificacion"]["demanda_horaria"]
-    if not df_dem.empty:
-        st.line_chart(df_dem.set_index("MOMENTO_OPERATIVO")["BLOQUES_ACTIVOS"])
-        st.dataframe(df_dem[["DIA", "HORA_STR", "BLOQUES_ACTIVOS"]], use_container_width=True, hide_index=True)
-
-with tab_calendario:
-    st.subheader("Distribución Semanal por Sala")
-    df_malla_cal = st.session_state["planificacion"]["df_malla"]
+    # 1. Indicadores de Desempeño Superiores (KPIs)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Cursos Procesados", meta.get("total_cursos", 0))
+    col2.metric("Asignaciones Exitosas", meta.get("total_asignadas", 0))
+    col3.metric("Tasa de Efectividad del Escenario", f"{meta.get('porcentaje_asignacion', 0)}%")
+    col4.metric("Secciones Rechazadas", meta.get("sin_sala", 0), delta_color="inverse")
     
-    if not df_malla_cal.empty:
-        sala_seleccionada = st.selectbox("Aula para Auditoría:", sorted(df_malla_cal["SALA"].unique()))
-        df_sala_filtrado = df_malla_cal[df_malla_cal["SALA"] == sala_seleccionada]
+    # 2. Pestañas de Visualización Organizada
+    tab_malla, tab_calendario, tab_criticos, tab_exportar = st.tabs([
+        "📋 Malla Consolidada", "📅 Agenda por Sala Física", "🚨 Auditoría de Rechazos", "📥 Descargas"
+    ])
+    
+    with tab_malla:
+        st.markdown("##### Vista de Auditoría General de Planificación")
+        st.dataframe(df_res_main, use_container_width=True, hide_index=True)
+        
+    with tab_calendario:
+        st.markdown("##### Agenda Horaria por Aula")
+        salas_disponibles = sorted([str(s) for s in df_res_main["SALA"].unique() if str(s) != "SIN SALA"])
+        sala_sel = st.selectbox("Seleccione el espacio físico a auditar:", salas_disponibles)
+        
+        df_sala_filtrado = df_res_main[df_res_main["SALA"] == sala_sel] if sala_sel else pd.DataFrame()
         
         if not df_sala_filtrado.empty:
-            # --- SOLUCIÓN ADAPTADA PARA TU CALENDARIO ---
-            col_hora = "HORARIO"
-            col_dia = "DIA"
-            col_texto = "NOMBRE SECCIÓN" if "NOMBRE SECCIÓN" in df_sala_filtrado.columns else "CARRERA"
+            # Extractor dinámico robusto para evitar KeyErrors accidentales
+            if "NOMBRE SECCIÓN" in df_sala_filtrado.columns: col_texto = "NOMBRE SECCIÓN"
+            elif "CARRERA" in df_sala_filtrado.columns: col_texto = "CARRERA"
+            else: col_texto = "SALA"
 
             try:
-                # Creamos la tabla pivote con las columnas reales del motor
+                # Pivote de calendario nativo
                 df_pivot = pd.pivot_table(
-                    df_sala_filtrado, index=col_hora, columns=col_dia, values=col_texto,
-                    aggfunc=lambda x: " Tope de horario: ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
+                    df_sala_filtrado, index="HORARIO", columns="DIA", values=col_texto,
+                    aggfunc=lambda x: " / ".join(sorted(list(map(str, x.unique())))) if len(x.unique()) > 1 else str(x.unique()[0])
                 )
                 
-                # Ordenamiento cronológico de las horas (usando el inicio del bloque)
-                indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(x.split("-")[0].strip(), format="%H:%M").time())
-                
-                # Ordenamiento de los días de la semana
+                # Ordenamiento cronológico seguro aislando el inicio del bloque de texto "08:30-10:00"
+                indice_cronologico = sorted(df_pivot.index, key=lambda x: pd.to_datetime(str(x).split("-")[0].strip(), format="%H:%M", errors='coerce').time())
                 dias_columnas = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
                 
-                # Renderizamos en Streamlit rellenando los vacíos con "Libre"
-                st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("Libre"), use_container_width=True)
-                
-            except Exception as e:
-                st.warning("No se pudo estructurar el calendario visual para esta sala debido a la estructura de sus horarios.")
+                st.dataframe(df_pivot.reindex(index=indice_cronologico, columns=dias_columnas).fillna("— (Disponible)"), use_container_width=True)
+            except Exception:
+                st.info("Estructurando los bloques cronológicos de la sala...")
+                st.dataframe(df_sala_filtrado[["DIA", "HORARIO", col_texto]], use_container_width=True, hide_index=True)
 
-with tab_criticos:
-    df_rech = st.session_state["planificacion"]["rechazos_carrera"]
-    df_res_criticos = st.session_state["planificacion"]["df_resultado"]
-    
-    st.markdown("##### Tasa de Reconocimiento de Aulas por Carrera (%)")
-    
-    # 1. Verificamos si hay datos de rechazos para graficar
-    if df_rech is not None and not df_rech.empty:
+    with tab_criticos:
+        df_rech_carrera = plan["rechazos"]
+        st.markdown("##### Distribución General de Cursos Excluidos por Carrera")
         
-        # Sincronizamos las columnas si viene el conteo directo del motor
-        if "sin_sala" in df_rech.columns and "CARRERA" in df_rech.columns:
-            df_rech["TASA_RECHAZO_PCT"] = df_rech["sin_sala"]
+        if df_rech_carrera is not None and not df_rech_carrera.empty:
+            st.bar_chart(df_rech_carrera.set_index("CARRERA")["sin_sala"])
+            st.dataframe(df_rech_carrera, use_container_width=True, hide_index=True)
             
-        # Graficamos de manera segura
-        if "TASA_RECHAZO_PCT" in df_rech.columns:
-            st.bar_chart(df_rech.set_index("CARRERA")["TASA_RECHAZO_PCT"])
-        elif "sin_sala" in df_rech.columns:
-            st.bar_chart(df_rech.set_index("CARRERA")["sin_sala"])
+            st.markdown("---")
+            st.markdown("##### Desglose Detallado de Secciones Afectadas")
             
-        # Mostramos la tabla resumen de rechazos por carrera
-        st.dataframe(df_rech, use_container_width=True, hide_index=True)
-    else:
-        # Este else ahora sí funciona correctamente si el dataframe está vacío
-        st.success("🎉 ¡Excelente noticia! No hubo ningún curso rechazado en este escenario.")
-        
-    st.markdown("---")
-    st.markdown("##### Detalle de Secciones Afectadas")
-    
-    # 2. Mostramos el desglose de cursos que quedaron con el ESTADO "SIN SALA"
-    df_sin_sala = df_res_criticos[df_res_criticos["ESTADO"] == "SIN SALA"] if df_res_criticos is not None else pd.DataFrame()
-    
-    if not df_sin_sala.empty:
-        columnas_visibles = [col for col in ["CARRERA", "NOMBRE SECCIÓN", "CUPOS_CONSOLIDADOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"] if col in df_sin_sala.columns]
-        st.dataframe(df_sin_sala[columnas_visibles].drop_duplicates(), use_container_width=True, hide_index=True)
-    else:
-        st.success("¡Todas las secciones encontraron un aula compatible!")
-
-with tab_libres:
-    df_lib = st.session_state["planificacion"]["salas_libres"]
-    
-    if not df_lib.empty:
-        col_f1, col_f2, col_f3 = st.columns(3)
-        f_edificio = col_f1.selectbox("Edificio:", ["TODOS"] + sorted(list(df_lib["EDIFICIO"].unique())))
-        f_dia = col_f2.selectbox("Día de la Semana:", ["TODOS"] + list(df_lib["DIA"].unique()))
-        f_cap = col_f3.number_input("Aforo Mínimo Requerido:", min_value=0, value=20, step=5)
-            
-        df_filtro_libres = df_lib.copy()
-        if f_edificio != "TODOS":
-            df_filtro_libres = df_filtro_libres[df_filtro_libres["EDIFICIO"] == f_edificio]
-        if f_dia != "TODOS":
-            df_filtro_libres = df_filtro_libres[df_filtro_libres["DIA"] == f_dia]
-        df_filtro_libres = df_filtro_libres[df_filtro_libres["CAPACIDAD"] >= f_cap]
-        
-        st.markdown(f"**Ventanas de tiempo disponibles encontradas:** {len(df_filtro_libres)}")
-
-        columnas_requeridas = [
-            "SALA", "EDIFICIO", "CAPACIDAD", "DIA", "INICIO", "FIN", "FECHA_DISP_INI", "FECHA_DISP_FIN"
-        ]
-
-        faltantes = [c for c in columnas_requeridas if c not in df_filtro_libres.columns]
-
-        if faltantes:
-            st.error(f"El motor devolvió un DataFrame sin las columnas esperadas.\n\nColumnas faltantes: {faltantes}")
-            st.write("Columnas disponibles:", df_filtro_libres.columns.tolist())
+            df_sin_sala = df_res_main[df_res_main["ESTADO"] == "SIN SALA"]
+            cols_utiles = [c for c in ["CARRERA", "NOMBRE SECCIÓN", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"] if c in df_sin_sala.columns]
+            st.dataframe(df_sin_sala[cols_utiles].drop_duplicates(), use_container_width=True, hide_index=True)
         else:
-            st.dataframe(
-                df_filtro_libres[columnas_requeridas].sort_values(by=["EDIFICIO", "SALA", "DIA", "INICIO"]),
-                use_container_width=True, hide_index=True
-            )
+            st.success("🎉 ¡Excelente noticia! El 100% de las secciones consiguieron un aula física óptima en este escenario.")
+
+    with tab_exportar:
+        st.markdown("##### Generar Paquete de Descarga Oficial")
+        excel_buffer = io.BytesIO()
+        
+        # openpyxl nativo estándar compatible con ambientes Linux de Streamlit Cloud
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df_res_main.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
+            plan["salas"].to_excel(writer, sheet_name="Uso_Ocupacion_Salas", index=False)
+            
+        st.download_button(
+            label="💾 Descargar Reporte en Excel (.xlsx)",
+            data=excel_buffer.getvalue(),
+            file_name=f"Reporte_Salas_{id_config}_{tasa_relax}pct.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+# --- REFRESH / CONTROL DE CACHÉ DE SIMULACIÓN ---
+if st.sidebar.button("Limpiar Memoria del Modelo"):
+    st.session_state["planificacion"] = None
+    if hasattr(st, "rerun"): st.rerun()
+    else: st.experimental_rerun()
