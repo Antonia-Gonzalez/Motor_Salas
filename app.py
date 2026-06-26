@@ -22,14 +22,17 @@ id_config = st.sidebar.text_input("ID de Planificación", value="ESC-2026")
 tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
 st.sidebar.caption("💡 100%: Filtro estricto de cercanía. 60%: Permite ubicar en cualquier edificio secundario disponible.")
 
-# Carga automática transparente del inventario físico base
-ruta_infra = "data/infraestructura_constante.xlsx"
+# --- AQUÍ VA EL CAMBIO INTELIGENTE DE RUTA ABSOLUTA ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ruta_infra = os.path.join(BASE_DIR, "data", "infraestructura_constante.xlsx")
+
 if os.path.exists(ruta_infra):
     df_infra = pd.read_excel(ruta_infra)
     salas_seleccionadas = df_infra.to_dict("records")
     st.sidebar.success(f"✅ {len(salas_seleccionadas)} salas cargadas desde la base de datos.")
 else:
-    st.sidebar.error(f"❌ Falta el archivo crítico de infraestructura en '{ruta_infra}'")
+    st.sidebar.error(f"❌ Falta el archivo crítico de infraestructura.")
+    st.sidebar.info(f"Ruta buscada por el sistema: `{ruta_infra}`")
     salas_seleccionadas = []
 
 # =========================================================
