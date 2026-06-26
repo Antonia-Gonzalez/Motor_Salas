@@ -12,13 +12,25 @@ def parse_time_to_minutes(time_str):
     except:
         return 0
 
+# --- TU NUEVA FUNCIÓN OPTIMIZADA POR SEGURIDAD ---
 def parse_horario_range(horario_str):
-    """Convierte un rango horario (ej: '08:30-10:00') en tupla de minutos."""
     try:
         horario_str = str(horario_str).strip()
-        if "-" in horario_str:
-            parts = horario_str.split("-")
-            return parse_time_to_minutes(parts[0]), parse_time_to_minutes(parts[1])
+        
+        # Reemplazos exhaustivos para limpiar guiones y espacios en el formato '13:30 -15:20'
+        horario_str = horario_str.replace(" – ", "-")
+        horario_str = horario_str.replace("–", "-")
+        horario_str = horario_str.replace(" - ", "-")
+        horario_str = horario_str.replace(" -", "-")
+        horario_str = horario_str.replace("- ", "-")
+        
+        partes = horario_str.split("-")
+        
+        if len(partes) == 2:
+            inicio = parse_time_to_minutes(partes[0])
+            fin = parse_time_to_minutes(partes[1])
+            return inicio, fin
+            
         return 0, 0
     except:
         return 0, 0
@@ -34,7 +46,6 @@ def verificar_colision(start_min, end_min, start_date, end_date, asignaciones_sa
 def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
     """
     Calcula la idoneidad exacta de la sala bajo las reglas institucionales.
-    Retorna (score_preferencia, score_edificio, desperdicio_capacidad) -> Menor es mejor.
     """
     tipo_sala = str(sala_dict["TIPO_SALA"]).strip().upper()
     edificio = str(sala_dict["EDIFICIO"]).strip().upper()
@@ -44,52 +55,36 @@ def calcular_score_sala(sala_dict, origen_base, tipo_reunion, materia, cupos):
     score_edificio = 99
     
     if capacity < cupos:
-        return (999, 999, 999) # Descalificada por aforo insuficiente
+        return (999, 999, 999)
         
-    # Diccionarios de asignación estricta por carrera
     INGENIERIAS = ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"]
     ADMINISTRACION = ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"]
     
-    # --- LÓGICA DE POSTGRADO ---
     if origen_base == "POSTGRADO":
         if "HIBR" in tipo_reunion:
             prefs = ["HYFLEX", "AUDITORIO", "AULA MAGNA", "STREAMING", "SALA NORMAL", "SALA TRADICIONAL"]
             if tipo_sala in prefs: score_preferencia = prefs.index(tipo_sala)
         elif "CLAS" in tipo_reunion:
-            if tipo_sala == "STREAMING":
-                score_preferencia = 0
-            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"] and edificio == "REL":
-                score_preferencia = 1
-            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]:
-                score_preferencia = 2
-            elif tipo_sala == "AUDITORIO":
-                score_preferencia = 3
-            elif tipo_sala == "HYFLEX":
-                score_preferencia = 4
+            if tipo_sala == "STREAMING": score_preferencia = 0
+            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"] and edificio == "REL": score_preferencia = 1
+            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]: score_preferencia = 2
+            elif tipo_sala == "AUDITORIO": score_preferencia = 3
+            elif tipo_sala == "HYFLEX": score_preferencia = 4
         elif "EXAM" in tipo_reunion or "PBRA" in tipo_reunion:
             prefs = ["SALA PLANA", "STREAMING", "SALA NORMAL", "SALA TRADICIONAL"]
             if tipo_sala in prefs: score_preferencia = prefs.index(tipo_sala)
         elif "AYUD" in tipo_reunion:
             if tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]: score_preferencia = 0
-            
-    # --- LÓGICA DE PREGRADO ---
     else:  
         if "CLAS" in tipo_reunion:
-            if tipo_sala == "STREAMING":
-                score_preferencia = 0
-            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]:
-                score_preferencia = 1
+            if tipo_sala == "STREAMING": score_preferencia = 0
+            elif tipo_sala in ["SALA NORMAL", "SALA TRADICIONAL"]: score_preferencia = 1
             
-            if any(cod in materia for cod in INGENIERIAS):
-                edificios_pref = ["ING", "CIEN"]
-            elif any(cod in materia for cod in ADMINISTRACION):
-                edificios_pref = ["REL", "BIB"]
-            else:
-                edificios_pref = ["HUM", "CIEN"]
+            if any(cod in materia for cod in INGENIERIAS): edificios_pref = ["ING", "CIEN"]
+            elif any(cod in materia for cod in ADMINISTRACION): edificios_pref = ["REL", "BIB"]
+            else: edificios_pref = ["HUM", "CIEN"]
                 
-            if edificio in edificios_pref:
-                score_edificio = edificios_pref.index(edificio)
-                
+            if edificio in edificios_pref: score_edificio = edificios_pref.index(edificio)
         elif "EXAM" in tipo_reunion or "PBRA" in tipo_reunion:
             prefs = ["SALA PLANA", "STREAMING", "SALA NORMAL", "SALA TRADICIONAL"]
             if tipo_sala in prefs: score_preferencia = prefs.index(tipo_sala)
@@ -111,13 +106,9 @@ def ejecutar_asignacion_escenario(
     except:
         df_infra = pd.DataFrame(columns=["SALA", "EDIFICIO", "CAPACIDAD", "TIPO_SALA"])
     
-    # --- NUEVA SECCIÓN DE CONTROL: Normalizar nombres de columnas físicas de Infraestructura ---
     df_infra.columns = [str(c).strip().upper() for c in df_infra.columns]
     if "TIPO DE SALA" in df_infra.columns:
         df_infra = df_infra.rename(columns={"TIPO DE SALA": "TIPO_SALA"})
-    if "TIPO DE RESTRICCIÓN" in df_infra.columns:
-        df_infra = df_infra.rename(columns={"TIPO DE RESTRICCIÓN": "TIPO_RESTRICCION"})
-    # ------------------------------------------------------------------------------------------
 
     df_infra["EDIFICIO"] = df_infra["EDIFICIO"].fillna("").astype(str).str.strip().str.upper()
     df_infra["SALA"] = df_infra["SALA"].fillna("").astype(str).str.strip().str.upper()
@@ -150,10 +141,35 @@ def ejecutar_asignacion_escenario(
         return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
     df_cursos = pd.concat(hojas_cargar, ignore_index=True)
-    
-    # Estandarizar también las columnas de los cursos
     df_cursos.columns = [str(c).strip().upper() for c in df_cursos.columns]
-    
+
+    # --- TU BLOQUE DE TRANSFORMACIÓN DE ANCHO A LARGO (Ubicado justo antes de limpiar CUPOS) ---
+    dias_semana = ["LUNES", "MARTES", "MIERCOLES", "MIÉRCOLES", "JUEVES", "VIERNES", "SABADO", "SÁBADO"]
+    dias_existentes = [d for d in dias_semana if d in df_cursos.columns]
+
+    if dias_existentes:
+        columnas_fijas = [c for c in df_cursos.columns if c not in dias_existentes]
+        registros = []
+
+        for _, fila in df_cursos.iterrows():
+            datos_base = {col: fila[col] for col in columnas_fijas}
+            for dia in dias_existentes:
+                horario = fila[dia]
+                if pd.notna(horario):
+                    horario = str(horario).strip()
+                    if horario != "" and horario.lower() != "nan":
+                        nuevo = datos_base.copy()
+                        # Normalizar el día de la semana quitando acentos
+                        nuevo["DIA"] = dia.replace("Á", "A").replace("É", "E")
+                        nuevo["HORARIO"] = horario
+                        registros.append(nuevo)
+
+        df_cursos = pd.DataFrame(registros)
+    # ------------------------------------------------------------------------------------------
+
+    if df_cursos.empty:
+        return pd.DataFrame(), {}, pd.DataFrame(), {}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     df_cursos["MATERIA"] = df_cursos["MATERIA"].fillna("").astype(str).str.strip().str.upper()
     
     lista_carreras_caps = [str(c).strip().upper() for c in lista_carreras]
@@ -165,7 +181,6 @@ def ejecutar_asignacion_escenario(
     col_ini = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("INI" in str(c).upper() or "COM" in str(c).upper())), None)
     col_fin = next((c for c in df_cursos.columns if "FECHA" in str(c).upper() and ("TER" in str(c).upper() or "FIN" in str(c).upper())), None)
     
-    # --- NUEVA SECCIÓN DE CONTROL: Forzar fechas a Series para evitar fallos de AttributeError con .dt ---
     if col_ini and col_ini in df_cursos.columns:
         fechas_ini_raw = df_cursos[col_ini]
     else:
@@ -178,21 +193,19 @@ def ejecutar_asignacion_escenario(
 
     df_cursos["FECHA_INI_CONV"] = pd.to_datetime(fechas_ini_raw, errors='coerce').dt.date.fillna(pd.to_datetime("2026-03-01").date())
     df_cursos["FECHA_FIN_CONV"] = pd.to_datetime(fechas_fin_raw, errors='coerce').dt.date.fillna(pd.to_datetime("2026-12-31").date())
-    # -----------------------------------------------------------------------------------------------------
     
     df_cursos["CUPOS"] = df_cursos["CUPOS"].fillna(0).astype(int)
     df_cursos["DIA"] = df_cursos["DIA"].fillna("S/D").astype(str).str.strip().str.upper()
     df_cursos["HORARIO"] = df_cursos["HORARIO"].fillna("S/H").astype(str).str.strip().str.upper()
     df_cursos["TIPO_REUNION"] = df_cursos["TIPO_REUNION"].fillna("CLAS").astype(str).str.strip().str.upper()
 
-    # 3. MANEJO DE LISTAS CRUZADAS
+    # 3. MANEJO DE LISTAS CRUZADAS (Ajustado con la regla de SUMAR fija pedida anteriormente)
     col_cruzada = next((c for c in df_cursos.columns if "CRUZ" in str(c).upper() or "COMPART" in str(c).upper()), None)
     dict_cupos_cruzados = {}
     if col_cruzada and modo_lista_cruzada:
         df_cursos[col_cruzada] = df_cursos[col_cruzada].fillna("").astype(str).str.strip()
         df_valid_cruz = df_cursos[df_cursos[col_cruzada] != ""]
         for name, group in df_valid_cruz.groupby([col_cruzada, "DIA", "HORARIO"]):
-            # Forzamos a que sume, o si viene vacío/otro valor, la suma sea el comportamiento base
             if modo_lista_cruzada == "SUMAR" or not modo_lista_cruzada:
                 val = group["CUPOS"].sum()
             elif modo_lista_cruzada == "MAXIMO":
@@ -200,17 +213,15 @@ def ejecutar_asignacion_escenario(
             elif modo_lista_cruzada == "PROMEDIO":
                 val = int(group["CUPOS"].mean())
             else:
-                val = group["CUPOS"].sum() # Fallback seguro a SUMAR en vez de MAXIMO
+                val = group["CUPOS"].sum()
             dict_cupos_cruzados[name] = val
 
     # Cola de prioridades
     def calc_prioridad_programa(row):
         if row["ORIGEN_BASE"] == "POSTGRADO": return 1
         mat = str(row["MATERIA"]).strip().upper()
-        
         INGENIERIAS = ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"]
         ADMINISTRACION = ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"]
-        
         if any(cod in mat for cod in INGENIERIAS): return 2
         if any(cod in mat for cod in ADMINISTRACION): return 3
         return 4
@@ -239,7 +250,7 @@ def ejecutar_asignacion_escenario(
     conteo_asignados, conteo_rechazados = 0, 0
     salas_asignadas_cruzadas = {}
 
-    # 5. BUCLE CENTRAL ASIGNADOR (CON EXCLUSIÓN ESTRICTA)
+    # 5. BUCLE CENTRAL ASIGNADOR
     for curso in lista_cursos:
         cupos_originales = curso["CUPOS"]
         dia = curso["DIA"]
@@ -256,7 +267,6 @@ def ejecutar_asignacion_escenario(
         cruz_key = (curso[col_cruzada], dia, horario) if col_cruzada and curso[col_cruzada] != "" else None
         cupos_efectivos = dict_cupos_cruzados.get(cruz_key, cupos_originales) if cruz_key else cupos_originales
         
-        # --- FILTRO DE EXCLUSIÓN DE TIPOS ---
         TIPOS_REQUERIDOS = ["HIBR", "CLAS", "EXAM", "PBRA", "AYUD"]
         if not any(keyword in tipo_r for keyword in TIPOS_REQUERIDOS):
             resultados_asignacion.append({
@@ -286,12 +296,9 @@ def ejecutar_asignacion_escenario(
             flag_encontrado = False
             for umbral in umbrales_eficiencia:
                 for sala in salas_candidatas:
-                    if sala["CAPACIDAD"] < cupos_efectivos:
-                        continue
-                        
+                    if sala["CAPACIDAD"] < cupos_efectivos: continue
                     eficiencia_calc = cupos_efectivos / sala["CAPACIDAD"] if sala["CAPACIDAD"] > 0 else 0
-                    if eficiencia_calc < umbral:
-                        continue
+                    if eficiencia_calc < umbral: continue
                         
                     asigs_actuales = matriz_ocupacion.get((sala["SALA"], dia), [])
                     if verificar_colision(start_min, end_min, start_date, end_date, asigs_actuales):
@@ -300,16 +307,13 @@ def ejecutar_asignacion_escenario(
                         
                     sala_asignada = sala
                     flag_encontrado = True
-                    if cruz_key:
-                        salas_asignadas_cruzadas[cruz_key] = sala
+                    if cruz_key: salas_asignadas_cruzadas[cruz_key] = sala
                     break
-                if flag_encontrado:
-                    break
+                if flag_encontrado: break
 
         if sala_asignada:
             llave_matriz = (sala_asignada["SALA"], dia)
-            if llave_matriz not in matriz_ocupacion:
-                matriz_ocupacion[llave_matriz] = []
+            if llave_matriz not in matriz_ocupacion: matriz_ocupacion[llave_matriz] = []
             matriz_ocupacion[llave_matriz].append((start_min, end_min, start_date, end_date, f"{materia}-{seccion}"))
             
             conteo_asignados += 1
@@ -364,7 +368,6 @@ def ejecutar_asignacion_escenario(
         df_car = pd.DataFrame(columns=["CARRERA", "HORAS_OCUPADAS"])
         df_tip = pd.DataFrame(columns=["TIPO_REUNION", "HORAS_CONSUMIDAS"])
 
-    # Filtrado estricto de demandantes reales para no diluir los KPIs
     df_demandantes = df_res[df_res["ESTADO"].isin(["ASIGNADO", "SIN SALA"])]
     total_cursos_demandantes = len(df_demandantes)
     
@@ -388,7 +391,6 @@ def ejecutar_asignacion_escenario(
         df_dem = pd.DataFrame(columns=["MOMENTO_OPERATIVO", "BLOQUES_ACTIVOS", "DIA", "HORA_STR"])
         df_rech = pd.DataFrame(columns=["CARRERA", "TASA_RECHAZO_PCT"])
 
-    # Inventario dinámico de ventanas temporales libres
     lista_libres = []
     fecha_base_ini = pd.to_datetime("2026-03-01").date()
     fecha_base_fin = pd.to_datetime("2026-12-31").date()
