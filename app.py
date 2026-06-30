@@ -256,7 +256,7 @@ if not esc_state["malla_consolidada"].empty:
     max_date = df_malla_completa["_F_FIN_INTERNAL"].max()
     
     if pd.isna(min_date): min_date = pd.Timestamp("2026-01-01")
-    if pd.isna(max_date): max_date = pd.Timestamp("2026-31-31")
+    if pd.isna(max_date): max_date = pd.Timestamp("2026-12-31")
     
     df_malla_filtrada_tiempo = df_malla_completa.copy()
     max_bloques_disponibles_en_ventana = 50 # Base teórica semanal estándar
