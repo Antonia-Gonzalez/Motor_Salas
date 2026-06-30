@@ -11,6 +11,9 @@ KIN_EXCLUSIVE_ROOM = "UDS 201"
 INGENIERIAS = ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"]
 ADMIN = ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"]
 
+# LISTA MAESTRA DE TIPOS PERMITIDOS (Filtro Estricto)
+TIPOS_PERMITIDOS = ["HIBR", "CLAS", "EXAM", "PRBA", "AYUD"]
+
 # =========================================================
 # JUEGO DE REGLAS Y PRIORIDADES
 # =========================================================
@@ -69,7 +72,6 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
     materia = str(curso.get("MATERIA", ""))
     origen = curso.get("ORIGEN_BASE")
     
-    # 📌 ADAPTACIÓN: Uso de la columna exacta 'TIPO DE SALA'
     tipo_sala_infra = str(sala.get("TIPO DE SALA", "")).upper()
 
     score = 0
@@ -128,6 +130,14 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
 
     df_origen = pd.concat([df_post, df_pre], ignore_index=True)
     
+    # 📌 FILTRO ESTRICTO TEMPRANO: Excluir todo lo que no pertenezca a los tipos autorizados
+    if "TIPO" in df_origen.columns:
+        # Convertimos a string, pasamos a mayúsculas y verificamos si contiene alguna de las palabras clave permitidas
+        mascara_permitidos = df_origen["TIPO"].astype(str).str.upper().apply(
+            lambda x: any(t in x for t in TIPOS_PERMITIDOS)
+        )
+        df_origen = df_origen[mascara_permitidos].reset_index(drop=True)
+    
     if "MATERIA" in df_origen.columns:
         df_origen["CARRERA"] = df_origen["MATERIA"]
     else:
@@ -157,6 +167,10 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
             registros_planos.append(nuevo_bloque)
 
     df_procesable = pd.DataFrame(registros_planos)
+
+    if df_procesable.empty:
+        # Salvaguarda si tras aplicar el filtro estricto la tabla queda totalmente vacía
+        return pd.DataFrame(), {}, pd.DataFrame(), {"total_cursos": 0, "total_asignadas": 0, "porcentaje_asignacion": 0, "sin_sala": 0}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df_procesable["_p_origen"] = np.where(df_procesable["ORIGEN_BASE"] == "POSTGRADO", 1, 2)
     df_procesable["_p_tipo"] = df_procesable.apply(
