@@ -105,16 +105,68 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
 # =========================================================
 # CAPA 3: ENGINE PRINCIPAL DE ASIGNACIÓN
 # =========================================================
-def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_salas, relax_level=90):
-    # Carga nativa desde la pestaña correcta de la programación
-    df_origen = pd.read_excel(archivo_cursos_excel, sheet_name="BASE PREGRADO")
+def ejecutar_asignacion_escenario(
+        archivo_cursos_excel,
+        escenario_id,
+        lista_salas,
+        relax_level=90):
 
-    # Pre-procesamiento de Ranking Jerárquico Global (Pregrado vs Postgrado)
-    df_origen["_p_origen"] = df_origen["ORIGEN_BASE"].apply(lambda x: 1 if x == "POSTGRADO" else 2)
-    df_origen["_p_tipo"] = df_origen.apply(lambda r: prioridad_tipo(r.get("TIPO_REUNION", ""), r.get("ORIGEN_BASE", "")), axis=1)
+    # Leer el libro una sola vez (más eficiente)
+    excel = pd.ExcelFile(archivo_cursos_excel)
 
-    # Ordenamiento estable por criticidad de la asignación
-    df_origen = df_origen.sort_values(by=["_p_origen", "_p_tipo", "CUPOS"], ascending=[True, True, False])
+    # -------------------------
+    # PREGRADO
+    # -------------------------
+    if "BASE PREGRADO" in excel.sheet_names:
+        df_pre = pd.read_excel(excel, sheet_name="BASE PREGRADO")
+        df_pre["ORIGEN_BASE"] = "PREGRADO"
+    else:
+        df_pre = pd.DataFrame()
+
+    # -------------------------
+    # POSTGRADO
+    # -------------------------
+    if "BASE POSTGRADO" in excel.sheet_names:
+        df_post = pd.read_excel(excel, sheet_name="BASE POSTGRADO")
+        df_post["ORIGEN_BASE"] = "POSTGRADO"
+    else:
+        df_post = pd.DataFrame()
+
+    # -------------------------
+    # Validación
+    # -------------------------
+    if df_pre.empty and df_post.empty:
+        raise ValueError(
+            "No se encontraron las hojas 'BASE PREGRADO' ni 'BASE POSTGRADO'."
+        )
+
+    # Unión
+    df_origen = pd.concat(
+        [df_post, df_pre],
+        ignore_index=True
+    )
+
+    # Ranking institucional
+    df_origen["_p_origen"] = np.where(
+        df_origen["ORIGEN_BASE"] == "POSTGRADO",
+        1,
+        2
+    )
+
+    df_origen["_p_tipo"] = df_origen.apply(
+        lambda r: prioridad_tipo(
+            r["TIPO_REUNION"],
+            r["ORIGEN_BASE"]
+        ),
+        axis=1
+    )
+
+    # Orden oficial
+    df_origen = df_origen.sort_values(
+        by=["_p_origen", "_p_tipo", "CUPOS"],
+        ascending=[True, True, False]
+    )
+
     cursos = df_origen.to_dict("records")
 
     # Inyección de IDs Unificados Libres de conflictos por strings duplicados
