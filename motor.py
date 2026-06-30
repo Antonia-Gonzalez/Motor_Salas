@@ -116,35 +116,19 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
     return score
 
 # =========================================================
-# CAPA 3: ENGINE PRINCIPAL DE ASIGNACIÓN
+# CAPA 3: ENGINE PRINCIPAL DE ASIGNACIÓN (REESTRUCTURADO)
 # =========================================================
-def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_salas, relax_level=90):
+def ejecutar_asignacion_escenario(df_cursos, lista_salas, relax_level=90, ocupacion_previa=None):
+    # Salvaguarda si el set de datos entrante viene vacío desde el app.py
+    if df_cursos.empty:
+        return pd.DataFrame(), {}
 
-    excel = pd.ExcelFile(archivo_cursos_excel)
-
-    if "BASE PREGRADO" in excel.sheet_names:
-        df_pre = pd.read_excel(excel, sheet_name="BASE PREGRADO")
-        df_pre["ORIGEN_BASE"] = "PREGRADO"
-    else:
-        df_pre = pd.DataFrame()
-
-    if "BASE POSTGRADO" in excel.sheet_names:
-        df_post = pd.read_excel(excel, sheet_name="BASE POSTGRADO")
-        df_post["ORIGEN_BASE"] = "POSTGRADO"
-    else:
-        df_post = pd.DataFrame()
-
-    if df_pre.empty and df_post.empty:
-        raise ValueError("No se encontraron las hojas 'BASE PREGRADO' ni 'BASE POSTGRADO'.")
-
-    df_origen = pd.concat([df_post, df_pre], ignore_index=True)
+    df_origen = df_cursos.copy()
     
     # 📌 FILTRO ESTRICTO TEMPRANO: Excluir todo lo que no pertenezca a los tipos autorizados
     if "TIPO" in df_origen.columns:
-        # Rellenamos celdas vacías con "DESCONOCIDO" para que sean strings válidos y no floten como NaN
         df_origen["TIPO"] = df_origen["TIPO"].fillna("DESCONOCIDO").astype(str)
         
-        # Ahora pasamos a mayúsculas y filtramos de forma segura
         mascara_permitidos = df_origen["TIPO"].str.upper().apply(
             lambda x: any(t in x for t in TIPOS_PERMITIDOS)
         )
@@ -181,8 +165,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
     df_procesable = pd.DataFrame(registros_planos)
 
     if df_procesable.empty:
-        # Salvaguarda si tras aplicar el filtro estricto la tabla queda totalmente vacía
-        return pd.DataFrame(), {}, pd.DataFrame(), {"total_cursos": 0, "total_asignadas": 0, "porcentaje_asignacion": 0, "sin_sala": 0}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), {}
 
     # Sanitizar explícitamente la columna de listas cruzadas sin borrar datos anteriores
     if "LISTA CRUZADA" in df_procesable.columns:
@@ -206,7 +189,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
         cupos_sumados = df_procesable[mask_cruzadas].groupby(["LISTA CRUZADA", "DIA", "HORARIO"])["CUPOS"].transform("sum")
         df_procesable.loc[mask_cruzadas, "CUPOS_TOTALES_CONJUNTO"] = cupos_sumados
 
-    # Orden jerárquico modificado usando la métrica del conjunto agrupado
+    # Orden jerárquico usando la métrica del conjunto agrupado
     df_procesable = df_procesable.sort_values(
         by=["_p_origen", "_p_tipo", "CUPOS_TOTALES_CONJUNTO"], ascending=[True, True, False]
     )
@@ -216,9 +199,9 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
     for s in lista_salas:
         s["SALA_ID"] = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
 
-    ocupacion = {}
+    # 📌 HERENCIA MÁSTER: El motor adopta el estado exacto de las corridas previas congeladas
+    ocupacion = ocupacion_previa.copy() if ocupacion_previa is not None else {}
     malla = []
-    asignados = 0
     
     # Registro de anclaje para asegurar que las colisiones autorizadas queden en la misma sala física
     lideres_cruzados_asignados = {}
@@ -274,8 +257,6 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
             
             if lc_actual != "":
                 lideres_cruzados_asignados[clave_ancla] = mejor_s
-                
-            asignados += 1
 
             malla.append({
                 **c, 
@@ -295,32 +276,4 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
                 "MOTIVO_RECHAZO": f"Capacidad insuficiente para conjunto sumado ({cupos_curso} alumnos) o colisión insalvable"
             })
 
-    df_res = pd.DataFrame(malla)
-
-    # =========================================================
-    # CAPA 4: ADAPTER / PROCESAMIENTO DE MÉTRICAS VISUALES
-    # =========================================================
-    metricas = []
-    for s in lista_salas:
-        occ = sum(1 for k in ocupacion if k[0] == s["SALA_ID"])
-        metricas.append({
-            "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"],
-            "CAPACIDAD": s["CAPACIDAD"], "BLOQUES_OCUPADOS": occ,
-            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, 50 - occ)
-        })
-    df_s = pd.DataFrame(metricas)
-
-    resumen = {
-        "total_cursos": len(cursos),
-        "total_asignadas": asignados,
-        "porcentaje_asignacion": round((asignados / len(cursos) * 100), 2) if len(cursos) > 0 else 0,
-        "sin_sala": len(cursos) - asignados
-    }
-
-    df_sin_sala_only = df_res[df_res["ESTADO"] == "SIN SALA"]
-    if not df_sin_sala_only.empty and "CARRERA" in df_sin_sala_only.columns:
-        df_rech = df_sin_sala_only.groupby("CARRERA").size().reset_index(name="sin_sala")
-    else:
-        df_rech = pd.DataFrame(columns=["CARRERA", "sin_sala"])
-
-    return df_res, ocupacion, df_origen, resumen, df_s, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), df_rech
+    return pd.DataFrame(malla), ocupacion
