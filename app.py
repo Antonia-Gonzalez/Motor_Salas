@@ -24,7 +24,7 @@ st.sidebar.caption("💡 100%: Filtro estricto de cercanía. 60%: Permite ubicar
 
 # --- AQUÍ VA EL CAMBIO INTELIGENTE DE RUTA ABSOLUTA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ruta_infra = os.path.join(BASE_DIR, "data", "infraestructura_constante.xlsx")
+ruta_infra = os.path.join(BASE_DIR, "infraestructura_constante.xlsx")
 
 if os.path.exists(ruta_infra):
     df_infra = pd.read_excel(ruta_infra)
