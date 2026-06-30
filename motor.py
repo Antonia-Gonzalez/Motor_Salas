@@ -1,6 +1,7 @@
 # motor.py
 import numpy as np
 import pandas as pd
+import re
 
 DOCT_ONLY_POSTGRADO = ["DOCT", "DOCT II"]
 KIN_EXCLUSIVE_ROOM = "UDS 201"
@@ -70,12 +71,20 @@ def score_sala(curso, sala, occ_sala, occ_edif, cupos_conjunto, relax_level):
     score += occ_sala * 0.2 + occ_edif * 0.5
     return score
 
+# 🛠️ FUNCIÓN AUXILIAR: Remueve horas adicionales o texto parásito en los extremos del string horario
+def limpiar_string_horario(txt_horario):
+    txt = str(txt_horario).strip()
+    # Busca el patrón clásico de HH:MM - HH:MM e ignora lo que venga después
+    match = re.search(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', txt)
+    if match:
+        return f"{match.group(1)} - {match.group(2)}"
+    return txt
+
 def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90, ocupacion_previa=None, id_corrida="GLOBAL_RUN"):
     dicc_vacio = {"malla": pd.DataFrame(), "ocupacion": {}, "resumen": {"total_cursos":0, "total_asignadas":0, "porcentaje_asignacion":0, "sin_sala":0}, "metricas": pd.DataFrame(), "rechazos": pd.DataFrame()}
     if df_cursos.empty: return dicc_vacio
 
     lista_salas = [s.copy() for s in lista_salas_origen]
-    # Mapeo rápido de salas existentes en el inventario base
     dict_infra_lookup = {}
     for s in lista_salas:
         s["SALA_ID"] = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
@@ -87,7 +96,9 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         mascara_permitidos = df_origen["TIPO"].str.upper().apply(lambda x: any(t in x for t in TIPOS_PERMITIDOS))
         df_origen = df_origen[mascara_permitidos].reset_index(drop=True)
     
-    df_origen["CARRERA"] = df_origen["MATERIA"] if "MATERIA" in df_origen.columns else "DESCONOCIDA"
+    # 📌 REQUISITO: Nos aseguramos de mantener y usar estrictamente la columna 'MATERIA'
+    if "MATERIA" not in df_origen.columns:
+        df_origen["MATERIA"] = "DESCONOCIDA"
 
     dias_columnas = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"]
     registros_planos = []
@@ -98,7 +109,8 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             if pd.notna(val_dia) and str(val_dia).strip() != "" and "-" in str(val_dia):
                 nuevo_bloque = item.copy()
                 nuevo_bloque["DIA"] = dia
-                nuevo_bloque["HORARIO"] = str(val_dia).strip()
+                # 📌 REQUISITO: Limpieza de la hora adicional o residuos en el texto de horarios
+                nuevo_bloque["HORARIO"] = limpiar_string_horario(val_dia)
                 nuevo_bloque["CORRIDA_ID"] = id_corrida
                 registros_planos.append(nuevo_bloque)
                 tiene_horarios = True
@@ -129,7 +141,6 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
     ocupacion_salas_counter = {}
     ocupacion_edificios_counter = {}
 
-    # Inicializar contadores con ocupación heredada de corridas previas
     for (sala_id, _, _), info in ocupacion.items():
         ocupacion_salas_counter[sala_id] = ocupacion_salas_counter.get(sala_id, 0) + 1
         ocupacion_edificios_counter[sala_id.split("_")[0]] = ocupacion_edificios_counter.get(sala_id.split("_")[0], 0) + 1
@@ -138,26 +149,22 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
     malla_congelados = []
     asignados_esta_corrida = 0
 
-    # 📌 PASO CLAVE: RECONOCIMIENTO Y PRE-CONGELAMIENTO DE ASIGNACIONES MANUALES (Ej: Laboratorios)
     for c in cursos:
         dia_curso = c.get("DIA")
         hora_curso = c.get("HORARIO")
         nrc_actual = str(c.get("NRC", c.get("N°", "N/A")))
-        c["ID_ASIGNACION_UNICO"] = f"{nrc_actual}_{dia_curso}_{hora_curso}".replace(" ", "")
-
-        # Revisamos si la columna 'SALA' ya viene con datos en el Excel original
+        
+        # Omitimos la inyección de la columna "ID_ASIGNACION_UNICO" por requerimiento directo
         sala_original_excel = str(c.get("SALA", "")).strip().upper() if pd.notna(c.get("SALA")) else ""
         
         if sala_original_excel != "" and sala_original_excel != "NAN" and sala_original_excel != "SIN SALA":
-            # Caso A: La sala manual existe en nuestra infraestructura_constante.xlsx
             if sala_original_excel in dict_infra_lookup:
                 s_infra = dict_infra_lookup[sala_original_excel]
                 s_id = s_infra["SALA_ID"]
                 
-                # Registramos el bloqueo inmediato de la celda
                 ocupacion[(s_id, dia_curso, hora_curso)] = {
                     "IDENTIFICADOR": nrc_actual, "LISTA_CRUZADA": c.get("LISTA CRUZADA", ""),
-                    "CORRIDA": f"MANUAL_{id_corrida}", "MATERIA": c["CARRERA"], 
+                    "CORRIDA": f"MANUAL_{id_corrida}", "MATERIA": c["MATERIA"], 
                     "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0))
                 }
                 ocupacion_salas_counter[s_id] = ocupacion_salas_counter.get(s_id, 0) + 1
@@ -169,14 +176,12 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
                 })
                 asignados_esta_corrida += 1
             else:
-                # Caso B: Salas externas, laboratorios específicos de una sola vez que NO están en el maestro de infraestructura
-                # Igual las respetamos y protegemos creando un ID virtual para evitar que choquen con otras
                 s_id_virtual = f"EXTERNA_{sala_original_excel}".replace(" ", "_")
                 edificio_virtual = str(c.get("EDIFICIO", "EXTERNO")).strip().upper() if pd.notna(c.get("EDIFICIO")) else "EXTERNO"
                 
                 ocupacion[(s_id_virtual, dia_curso, hora_curso)] = {
                     "IDENTIFICADOR": nrc_actual, "LISTA_CRUZADA": c.get("LISTA CRUZADA", ""),
-                    "CORRIDA": f"ESPECIAL_EXTERNA", "MATERIA": c["CARRERA"], "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0))
+                    "CORRIDA": f"ESPECIAL_EXTERNA", "MATERIA": c["MATERIA"], "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0))
                 }
                 malla_congelados.append({
                     **c, "SALA": sala_original_excel, "EDIFICIO": edificio_virtual, 
@@ -184,10 +189,8 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
                 })
                 asignados_esta_corrida += 1
         else:
-            # Si no trae asignación, va a la cola normal del optimizador hper-veloz
             cursos_regulares_a_procesar.append(c)
 
-    # Ordenamos únicamente los cursos regulares que necesitan buscar un lugar
     df_regulares = pd.DataFrame(cursos_regulares_a_procesar)
     if not df_regulares.empty:
         df_regulares = df_regulares.sort_values(by=["_p_origen", "_p_tipo", "CUPOS_TOTALES_CONJUNTO"], ascending=[True, True, False])
@@ -196,7 +199,6 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
     malla_final = list(malla_congelados)
     lideres_cruzados_asignados = {}
 
-    # --- PROCESAMIENTO REGULAR (Búsqueda inteligente sobre espacios remanentes libres) ---
     for c in cursos_regulares_a_procesar:
         mejor_s = None
         mejor_score = 1e9
@@ -213,7 +215,7 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         if lc_actual != "" and clave_ancla in lideres_cruzados_asignados:
             mejor_s = lideres_cruzados_asignados[clave_ancla]
         else:
-            pref_edificios = edificio_preferido(c["CARRERA"])
+            pref_edificios = edificio_preferido(c["MATERIA"])
             if relax_level == 100:
                 s1, s2 = [s for s in lista_salas if s["EDIFICIO"] in pref_edificios], []
             elif relax_level >= 90:
@@ -222,12 +224,10 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             else:
                 s1, s2 = lista_salas, []
 
-            # Fase 1: Buscar en el ideal respetando los bloqueos previos manuales
             for s in s1:
                 if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s) or colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion, lc_actual): continue
                 sc = score_sala(c, s, ocupacion_salas_counter.get(s["SALA_ID"], 0), ocupacion_edificios_counter.get(s["EDIFICIO"], 0), cupos_curso, relax_level)
                 if sc < mejor_score: mejor_score, mejor_s = sc, s
-            # Fase 2: Buscar fuera del ideal si hay colisiones
             if mejor_s is None and s2:
                 for s in s2:
                     if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s) or colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion, lc_actual): continue
@@ -237,7 +237,7 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         if mejor_s:
             ocupacion[(mejor_s["SALA_ID"], dia_curso, hora_curso)] = {
                 "IDENTIFICADOR": str(c.get("NRC", "N/A")), "LISTA_CRUZADA": lc_actual,
-                "CORRIDA": id_corrida, "MATERIA": c["CARRERA"], 
+                "CORRIDA": id_corrida, "MATERIA": c["MATERIA"], 
                 "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": cupos_curso
             }
             ocupacion_salas_counter[mejor_s["SALA_ID"]] = ocupacion_salas_counter.get(mejor_s["SALA_ID"], 0) + 1
@@ -250,6 +250,11 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
 
     df_res = pd.DataFrame(malla_final)
     
+    # 📌 REQUISITO EXPLICITO: Eliminar columnas de los días de la semana de la salida final
+    columnas_a_remover = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "CARRERA", "ID_ASIGNACION_UNICO", "_p_origen", "_p_tipo"]
+    columnas_existentes_a_remover = [col for col in columnas_a_remover if col in df_res.columns]
+    df_res = df_res.drop(columns=columnas_existentes_a_remover)
+
     metricas_infra = []
     for s in lista_salas:
         occ = ocupacion_salas_counter.get(s["SALA_ID"], 0)
@@ -259,8 +264,8 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         })
     df_metricas_salas = pd.DataFrame(metricas_infra)
 
-    df_sin_sala = df_res[df_res["ESTADO"] == "SIN SALA"]
-    df_rech = df_sin_sala.groupby("CARRERA").size().reset_index(name="sin_sala") if not df_sin_sala.empty else pd.DataFrame(columns=["CARRERA", "sin_sala"])
+    df_sin_sala = df_res[df_res["ESTADO"] == "SIN SALA"] if "ESTADO" in df_res.columns else pd.DataFrame()
+    df_rech = df_sin_sala.groupby("MATERIA").size().reset_index(name="sin_sala") if (not df_sin_sala.empty and "MATERIA" in df_sin_sala.columns) else pd.DataFrame(columns=["MATERIA", "sin_sala"])
 
     resumen = {
         "total_cursos": len(cursos), "total_asignadas": asignados_esta_corrida,
