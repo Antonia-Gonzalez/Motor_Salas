@@ -255,19 +255,52 @@ if not esc_state["malla_consolidada"].empty:
     min_date = df_malla_completa["_F_INI_INTERNAL"].min()
     max_date = df_malla_completa["_F_FIN_INTERNAL"].max()
     
-    if pd.isna(min_date): min_date = pd.Timestamp("2026-03-01")
-    if pd.isna(max_date): max_date = pd.Timestamp("2026-07-31")
+    if pd.isna(min_date): min_date = pd.Timestamp("2026-01-01")
+    if pd.isna(max_date): max_date = pd.Timestamp("2026-31-31")
     
     df_malla_filtrada_tiempo = df_malla_completa.copy()
     max_bloques_disponibles_en_ventana = 50 # Base teórica semanal estándar
 
     if tipo_ventana == "Por Mes":
-        mes_sel = col_v2.selectbox("Seleccione Mes:", options=[3, 4, 5, 6, 7], format_func=lambda x: ["Marzo", "Abril", "Mayo", "Junio", "Julio"][x-3])
+
+        MESES = {
+            1: "Enero",
+            2: "Febrero",
+            3: "Marzo",
+            4: "Abril",
+            5: "Mayo",
+            6: "Junio",
+            7: "Julio",
+            8: "Agosto",
+            9: "Septiembre",
+            10: "Octubre",
+            11: "Noviembre",
+            12: "Diciembre"
+        }
+
+    # Obtener automáticamente todos los meses presentes en la programación
+        meses_disponibles = sorted(
+            pd.concat([
+                df_malla_completa["_F_INI_INTERNAL"].dt.month,
+                df_malla_completa["_F_FIN_INTERNAL"].dt.month
+            ]).dropna().astype(int).unique()
+        )
+    
+        mes_sel = col_v2.selectbox(
+            "Seleccione Mes:",
+            options=meses_disponibles,
+            format_func=lambda x: MESES[x]
+        )
+    
+        # Cursos vigentes durante el mes seleccionado
         df_malla_filtrada_tiempo = df_malla_completa[
-            (df_malla_completa["_F_INI_INTERNAL"].dt.month <= mes_sel) & 
+            (df_malla_completa["_F_INI_INTERNAL"].dt.month <= mes_sel) &
             (df_malla_completa["_F_FIN_INTERNAL"].dt.month >= mes_sel)
         ]
-        max_bloques_disponibles_en_ventana = 50 * 4 
+    
+        # Número de semanas reales del mes
+        semanas_mes = 4 if mes_sel != 2 else 4
+        max_bloques_disponibles_en_ventana = 50 * semanas_mes
         
     elif tipo_ventana == "Por Semana Específica":
         fecha_sem = col_v2.date_input("Seleccione un día de la semana a consultar:", value=min_date.date())
