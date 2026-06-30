@@ -52,8 +52,23 @@ def reconstruir_escenario_completo():
     
     # Regenerar datos de infraestructura con fechas originales para cálculo dinámico
     df_malla_temp = esc_state["malla_consolidada"]
-    col_inicio = "FECHA INICIO" if "FECHA INICIO" in df_malla_temp.columns else ("FECHA_INICIO" if "FECHA_INICIO" in df_malla_temp.columns else None)
-    col_fin = "FECHA FIN" if "FECHA FIN" in df_malla_temp.columns else ("FECHA_FIN" if "FECHA_FIN" in df_malla_temp.columns else None)
+    col_inicio = next(
+        (
+            c
+            for c in ["FECHA INICIO", "FECHA_INICIO"]
+            if c in df_malla_temp.columns
+        ),
+        None,
+    )
+
+    col_fin = next(
+        (
+            c
+            for c in ["FECHA FIN", "FECHA_FIN"]
+            if c in df_malla_temp.columns
+        ),
+        None,
+    )
     
     if col_inicio and not df_malla_temp.empty:
         df_malla_temp["_F_INI_INTERNAL"] = pd.to_datetime(df_malla_temp[col_inicio], errors='coerce')
@@ -208,6 +223,23 @@ if not esc_state["malla_consolidada"].empty:
     st.markdown("### 📊 3. Dashboard de Planificación Temporal")
     
     df_malla_completa = esc_state["malla_consolidada"].copy()
+
+    # =========================================================
+    # Homologación de nombres de columnas de fechas
+    # =========================================================
+    if "FECHA INICIO" in df_malla_completa.columns:
+        COL_FECHA_INICIO = "FECHA INICIO"
+    elif "FECHA_INICIO" in df_malla_completa.columns:
+        COL_FECHA_INICIO = "FECHA_INICIO"
+    else:
+        COL_FECHA_INICIO = None
+
+    if "FECHA FIN" in df_malla_completa.columns:
+        COL_FECHA_FIN = "FECHA FIN"
+    elif "FECHA_FIN" in df_malla_completa.columns:
+        COL_FECHA_FIN = "FECHA_FIN"
+    else:
+        COL_FECHA_FIN = None
     
     # 📆 CONTROL GLOBAL DE VENTANA DE TIEMPO DE CONSULTA
     st.markdown("#### 📆 Seleccionar Ventana de Tiempo para Auditoría en Pantalla")
@@ -308,10 +340,26 @@ if not esc_state["malla_consolidada"].empty:
             
             if not df_sala_filtrado.empty:
                 # Modificación: Visualizar explícitamente las fechas y vigencia del curso en el bloque
+                if COL_FECHA_INICIO and COL_FECHA_FIN:
+
+                    fecha_ini = df_sala_filtrado[COL_FECHA_INICIO].fillna("").astype(str)
+                    fecha_fin = df_sala_filtrado[COL_FECHA_FIN].fillna("").astype(str)
+
+                else:
+
+                    fecha_ini = ""
+                    fecha_fin = ""
+
                 df_sala_filtrado["DISPLAY"] = (
-                    df_sala_filtrado["MATERIA"] + 
-                    " [" + df_sala_filtrado["FECHA INICIO"].astype(str) + " a " + df_sala_filtrado["FECHA FIN"].astype(str) + "]" +
-                    " (Ef: " + df_sala_filtrado["EFICIENCIA_%"].astype(str) + "%)"
+                    df_sala_filtrado["MATERIA"].astype(str)
+                    + " ["
+                    + fecha_ini
+                    + " a "
+                    + fecha_fin
+                    + "]"
+                    + " (Ef: "
+                    + df_sala_filtrado["EFICIENCIA_%"].astype(str)
+                    + "%)"
                 )
                 try:
                     df_pivot = pd.pivot_table(
@@ -365,8 +413,23 @@ if not esc_state["malla_consolidada"].empty:
             c_izq, c_der = st.columns([2, 1])
             with c_izq:
                 # Clonamos y formateamos las fechas internas de forma segura para la interfaz
-                df_sin_sala["INICIO"] = df_sin_sala["_F_INI_INTERNAL"].dt.strftime('%Y-%m-%d').fillna("Sin fecha")
-                df_sin_sala["FIN"] = df_sin_sala["_F_FIN_INTERNAL"].dt.strftime('%Y-%m-%d').fillna("Sin fecha")
+                if "_F_INI_INTERNAL" in df_sin_sala.columns:
+                    df_sin_sala["INICIO"] = (
+                        df_sin_sala["_F_INI_INTERNAL"]
+                        .dt.strftime("%Y-%m-%d")
+                        .fillna("Sin fecha")
+                    )
+                else:
+                    df_sin_sala["INICIO"] = "Sin fecha"
+
+                if "_F_FIN_INTERNAL" in df_sin_sala.columns:
+                    df_sin_sala["FIN"] = (
+                        df_sin_sala["_F_FIN_INTERNAL"]
+                            .dt.strftime("%Y-%m-%d")
+                            .fillna("Sin fecha")
+                    )
+                else:
+                    df_sin_sala["FIN"] = "Sin fecha"
                 
                 # Definimos las columnas que garantizamos que existen en el dataframe procesado
                 columnas_mostrar = ["MATERIA", "CUPOS", "INICIO", "FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
