@@ -360,11 +360,20 @@ if not esc_state["malla_consolidada"].empty:
             st.info("Cargue datos de programación para activar el mapa térmico.")
 
     with tab_criticos:
-        df_sin_sala = df_malla_completa[df_malla_completa["ESTADO"] == "SIN SALA"]
+        df_sin_sala = df_malla_completa[df_malla_completa["ESTADO"] == "SIN SALA"].copy()
         if not df_sin_sala.empty:
             c_izq, c_der = st.columns([2, 1])
             with c_izq:
-                st.dataframe(df_sin_sala[["MATERIA", "CUPOS", "FECHA INICIO", "FECHA FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"]], use_container_width=True, hide_index=True)
+                # Clonamos y formateamos las fechas internas de forma segura para la interfaz
+                df_sin_sala["INICIO"] = df_sin_sala["_F_INI_INTERNAL"].dt.strftime('%Y-%m-%d').fillna("Sin fecha")
+                df_sin_sala["FIN"] = df_sin_sala["_F_FIN_INTERNAL"].dt.strftime('%Y-%m-%d').fillna("Sin fecha")
+                
+                # Definimos las columnas que garantizamos que existen en el dataframe procesado
+                columnas_mostrar = ["MATERIA", "CUPOS", "INICIO", "FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
+                # Filtramos solo las que existan realmente para evitar cualquier otro KeyError imprevisto
+                columnas_seguras = [col for col in columnas_mostrar if col in df_sin_sala.columns]
+                
+                st.dataframe(df_sin_sala[columnas_seguras], use_container_width=True, hide_index=True)
             with c_der:
                 st.markdown("**Frenos de Asignación acumulados por Materia**")
                 st.dataframe(esc_state["rechazos_consolidados"], use_container_width=True, hide_index=True)
