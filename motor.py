@@ -74,13 +74,13 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
     # --- Lógica Postgrado ---
     if origen == "POSTGRADO":
         if "HIBR" in tipo:
-            score += 0 if sala["TIPO_SALA"] in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
+            score += 0 if sala["TIPO DE SALA"] in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
         elif "CLAS" in tipo:
-            score += 0 if (sala["TIPO_SALA"] in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
+            score += 0 if (sala["TIPO DE SALA"] in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
         elif "EXAM" in tipo or "PRBA" in tipo:
-            score += 0 if sala["TIPO_SALA"] in ["PLANA", "STREAMING"] else 8
+            score += 0 if sala["TIPO DE SALA"] in ["PLANA", "STREAMING"] else 8
         elif "AYUD" in tipo:
-            score += 2 if sala["TIPO_SALA"] == "NORMAL" else 5
+            score += 2 if sala["TIPO DE SALA"] == "NORMAL" else 5
 
     # --- Lógica Pregrado ---
     else:
