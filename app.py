@@ -3,12 +3,14 @@ import streamlit as st
 import pandas as pd
 import io
 import os
+import numpy as np
 
 from motor import ejecutar_asignacion_escenario
 
 st.set_page_config(layout="wide", page_title="🏛️ Sistema de Planificación", page_icon="🏛️")
 st.title("🏛️ Sistema de Asignación de Salas UAndes")
 
+# Inicialización del estado de la sesión
 if "escenario" not in st.session_state:
     st.session_state["escenario"] = {
         "corridas_historicas": [],      
@@ -32,6 +34,7 @@ def reconstruir_escenario_completo():
         esc_state["rechazos_consolidados"] = pd.DataFrame()
         return
 
+    # Ejecutar secuencialmente cada tanda inyectada
     for run in esc_state["corridas_historicas"]:
         res_run = ejecutar_asignacion_escenario(
             df_cursos=run["df_cursos"],
@@ -47,18 +50,19 @@ def reconstruir_escenario_completo():
     esc_state["ocupacion_consolidada"] = nueva_ocupacion
     esc_state["malla_consolidada"] = pd.concat(mallas_acumuladas, ignore_index=True) if mallas_acumuladas else pd.DataFrame()
     
-    ult_salas = esc_state["corridas_historicas"][-1]["salas_infra"]
-    metricas_infra = []
-    for s in ult_salas:
-        s_id = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
-        occ = sum(1 for k in nueva_ocupacion if k[0] == s_id)
-        metricas_infra.append({
-            "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"], "CAPACIDAD": s["CAPACIDAD"], 
-            "BLOQUES_OCUPADOS": occ, "% Utilización": round((occ / 50 * 100), 1)
-        })
-    esc_state["metricas_infra"] = pd.DataFrame(metricas_infra)
+    # Regenerar datos de infraestructura con fechas originales para cálculo dinámico
+    df_malla_temp = esc_state["malla_consolidada"]
+    col_inicio = "FECHA INICIO" if "FECHA INICIO" in df_malla_temp.columns else ("FECHA_INICIO" if "FECHA_INICIO" in df_malla_temp.columns else None)
+    col_fin = "FECHA FIN" if "FECHA FIN" in df_malla_temp.columns else ("FECHA_FIN" if "FECHA_FIN" in df_malla_temp.columns else None)
     
-    df_sin = esc_state["malla_consolidada"][esc_state["malla_consolidada"]["ESTADO"] == "SIN SALA"] if ("ESTADO" in esc_state["malla_consolidada"].columns and not esc_state["malla_consolidada"].empty) else pd.DataFrame()
+    if col_inicio and not df_malla_temp.empty:
+        df_malla_temp["_F_INI_INTERNAL"] = pd.to_datetime(df_malla_temp[col_inicio], errors='coerce')
+        df_malla_temp["_F_FIN_INTERNAL"] = pd.to_datetime(df_malla_temp[col_fin], errors='coerce')
+    else:
+        df_malla_temp["_F_INI_INTERNAL"] = pd.NaT
+        df_malla_temp["_F_FIN_INTERNAL"] = pd.NaT
+
+    df_sin = df_malla_temp[df_malla_temp["ESTADO"] == "SIN SALA"] if ("ESTADO" in df_malla_temp.columns and not df_malla_temp.empty) else pd.DataFrame()
     esc_state["rechazos_consolidados"] = df_sin.groupby("MATERIA").size().reset_index(name="sin_sala") if (not df_sin.empty and "MATERIA" in df_sin.columns) else pd.DataFrame(columns=["MATERIA", "sin_sala"])
 
 # =========================================================
@@ -66,10 +70,24 @@ def reconstruir_escenario_completo():
 # =========================================================
 st.sidebar.header("⚙️ Parámetros de la Asignación")
 id_config = st.sidebar.text_input("Identificador de la corrida", value="TANDA-A")
-tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
+
+# Modificación: Explicitar los niveles incluyendo la tecnología y formato libre al 85%
+st.sidebar.markdown("**Nivel de Relajación y Criterios:**")
+tasa_relax = st.sidebar.select_slider(
+    "Seleccione el comportamiento del motor:",
+    options=[60, 75, 85, 90, 100],
+    value=90,
+    format_func=lambda x: {
+        100: "100% - Exclusivo (Máxima restricción por Edificio y Tipo)",
+        90: "90% - Priorizado (Escape a otros edificios si hay colisión)",
+        85: "85% - Libre (Tecnología, tipo y formato de sala 100% abiertos)",
+        75: "75% - Flexible (Minimiza distancias de campus)",
+        60: "60% - Asignación Total (Ignora preferencias geográficas)"
+    }[x]
+)
 
 min_eficiencia = st.sidebar.slider("Eficiencia Mínima de Ocupación Sala (%)", min_value=0, max_value=100, value=20, step=5)
-st.sidebar.caption("💡 Evita que cursos pequeños (ej: 10 alumnos) utilicen auditorios gigantescos (ej: capacidad 80).")
+st.sidebar.caption("💡 Evita que cursos pequeños utilicen aulas gigantescas.")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ruta_infra = os.path.join(BASE_DIR, "infraestructura_constante.xlsx")
@@ -135,7 +153,7 @@ if archivo_mem:
             esc_state["filtros_ui"]["edificio"] = f_edif
             esc_state["filtros_ui"]["sala"] = f_sala
             
-            df_cursos_prefiltrados = df_total_cursos
+            df_cursos_prefiltrados = df_total_cursos.copy()
             if not all_materias and f_mat: 
                 df_cursos_prefiltrados = df_cursos_prefiltrados[df_cursos_prefiltrados["MATERIA"].isin(f_mat)]
             
@@ -153,15 +171,15 @@ else:
     st.sidebar.info("ℹ️ Sube un archivo para inicializar los universos de control.")
 
 # =========================================================
-# 🚀 INYECCIÓN AL ESCENARIO INCREMENTAL
+# 🚀 PROCESAR E INYECTAR
 # =========================================================
 if archivo_mem and not df_cursos_prefiltrados.empty:
     st.markdown("### ⚙️ 2. Procesar condiciones")
-    if st.button("🚀 Confirmar e inciar asignación"):
+    if st.button("🚀 Confirmar e iniciar asignación"):
         if any(r["id"] == id_config for r in esc_state["corridas_historicas"]):
             st.error(f"El ID '{id_config}' ya existe en el escenario.")
         else:
-            with st.spinner("Consolidando asignaciones incrementales con control de eficiencia..."):
+            with st.spinner("Consolidando asignaciones incrementales con control de fechas..."):
                 esc_state["corridas_historicas"].append({
                     "id": id_config,
                     "df_cursos": df_cursos_prefiltrados.copy(),
@@ -174,110 +192,201 @@ if archivo_mem and not df_cursos_prefiltrados.empty:
 
 if esc_state["corridas_historicas"]:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🗂️Escenarios")
+    st.sidebar.subheader("🗂️ Escenarios")
     for idx, run in enumerate(esc_state["corridas_historicas"]):
         col_run_name, col_run_del = st.sidebar.columns([3, 1])
-        col_run_name.caption(f"**{run['id']}** ({len(run['df_cursos'])} curs. | {run.get('min_eficiencia',0)}% ef.)")
+        col_run_name.caption(f"**{run['id']}** ({len(run['df_cursos'])} curs. | {run['relax']}% rel.)")
         if col_run_del.button("🗑️", key=f"del_{run['id']}_{idx}"):
             esc_state["corridas_historicas"].pop(idx)
             reconstruir_escenario_completo()
             st.rerun()
 
 # =========================================================
-# Dashboard del Escenario
+# Dashboard del Escenario (Resultados y Vistas)
 # =========================================================
 if not esc_state["malla_consolidada"].empty:
-    st.markdown("### 📊 3. Dashboard del Escenario")
-    df_malla = esc_state["malla_consolidada"]
-    df_salas = esc_state["metricas_infra"]
-    df_rechazos = esc_state["rechazos_consolidados"]
-
-    tot_c = len(df_malla)
-    tot_a = sum(df_malla["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])) if "ESTADO" in df_malla.columns else 0
+    st.markdown("### 📊 3. Dashboard de Planificación Temporal")
     
-    df_asignados_validos = df_malla[df_malla["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])]
+    df_malla_completa = esc_state["malla_consolidada"].copy()
+    
+    # 📆 CONTROL GLOBAL DE VENTANA DE TIEMPO DE CONSULTA
+    st.markdown("#### 📆 Seleccionar Ventana de Tiempo para Auditoría en Pantalla")
+    col_v1, col_v2, col_v3 = st.columns(3)
+    
+    tipo_ventana = col_v1.selectbox(
+        "Ver utilización por:",
+        options=["Periodo Completo", "Por Mes", "Por Semana Específica", "Por Día Específico"]
+    )
+    
+    # Extracción de límites de fechas del set de datos reales
+    min_date = df_malla_completa["_F_INI_INTERNAL"].min()
+    max_date = df_malla_completa["_F_FIN_INTERNAL"].max()
+    
+    if pd.isna(min_date): min_date = pd.Timestamp("2026-03-01")
+    if pd.isna(max_date): max_date = pd.Timestamp("2026-07-31")
+    
+    df_malla_filtrada_tiempo = df_malla_completa.copy()
+    max_bloques_disponibles_en_ventana = 50 # Base teórica semanal estándar
+
+    if tipo_ventana == "Por Mes":
+        mes_sel = col_v2.selectbox("Seleccione Mes:", options=[3, 4, 5, 6, 7], format_func=lambda x: ["Marzo", "Abril", "Mayo", "Junio", "Julio"][x-3])
+        df_malla_filtrada_tiempo = df_malla_completa[
+            (df_malla_completa["_F_INI_INTERNAL"].dt.month <= mes_sel) & 
+            (df_malla_completa["_F_FIN_INTERNAL"].dt.month >= mes_sel)
+        ]
+        max_bloques_disponibles_en_ventana = 50 * 4 
+        
+    elif tipo_ventana == "Por Semana Específica":
+        fecha_sem = col_v2.date_input("Seleccione un día de la semana a consultar:", value=min_date.date())
+        ts_sem = pd.Timestamp(fecha_sem)
+        df_malla_filtrada_tiempo = df_malla_completa[
+            (df_malla_completa["_F_INI_INTERNAL"] <= ts_sem + pd.Timedelta(days=6)) & 
+            (df_malla_completa["_F_FIN_INTERNAL"] >= ts_sem)
+        ]
+        max_bloques_disponibles_en_ventana = 50
+
+    elif tipo_ventana == "Por Día Específico":
+        fecha_dia = col_v2.date_input("Seleccione el día exacto:", value=min_date.date())
+        ts_dia = pd.Timestamp(fecha_dia)
+        nombre_dia_en = ts_dia.day_name().upper()
+        dict_dias = {"MONDAY": "LUNES", "TUESDAY": "MARTES", "WEDNESDAY": "MIERCOLES", "THURSDAY": "JUEVES", "FRIDAY": "VIERNES", "SATURDAY": "SABADO"}
+        dia_traducido = dict_dias.get(nombre_dia_en, "DOMINGO")
+        
+        df_malla_filtrada_tiempo = df_malla_completa[
+            (df_malla_completa["_F_INI_INTERNAL"] <= ts_dia) & 
+            (df_malla_completa["_F_FIN_INTERNAL"] >= ts_dia) &
+            (df_malla_completa["DIA"] == dia_traducido)
+        ]
+        max_bloques_disponibles_en_ventana = 10 
+
+    # Recálculo de métricas dinámicas basadas en la ventana temporal seleccionada
+    ult_salas = esc_state["corridas_historicas"][-1]["salas_infra"]
+    metricas_infra_dinamicas = []
+    
+    for s in ult_salas:
+        s_id = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
+        if not df_malla_filtrada_tiempo.empty:
+            occ = len(df_malla_filtrada_tiempo[(df_malla_filtrada_tiempo["SALA"] == s["SALA"]) & (df_malla_filtrada_tiempo["EDIFICIO"] == s["EDIFICIO"])])
+        else:
+            occ = 0
+        
+        utilizacion_pct = round((occ / max(1, max_bloques_disponibles_en_ventana) * 100), 1)
+        metricas_infra_dinamicas.append({
+            "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"], "CAPACIDAD": s["CAPACIDAD"], 
+            "BLOQUES_OCUPADOS": occ, "% Utilización": min(100.0, utilizacion_pct)
+        })
+    df_salas_dinamicas = pd.DataFrame(metricas_infra_dinamicas)
+
+    # Indicadores Clave en Pantalla
+    tot_c = len(df_malla_completa)
+    tot_a = sum(df_malla_completa["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"]))
+    df_asignados_validos = df_malla_completa[df_malla_completa["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])]
     eficiencia_promedio = round(df_asignados_validos["EFICIENCIA_%"].mean(), 1) if not df_asignados_validos.empty else 0.0
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Secciones Evaluadas (Total)", tot_c)
-    col2.metric("Asignadas con Éxito", tot_a)
+    col1.metric("Secciones Totales (Periodo)", tot_c)
+    col2.metric(f"Asignadas Activas ({tipo_ventana})", len(df_malla_filtrada_tiempo[df_malla_filtrada_tiempo["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])]))
     col3.metric("Eficiencia Ocupación Aula", f"{eficiencia_promedio}%")
-    col4.metric("Sin Aula Física", tot_c - tot_a, delta_color="inverse")
+    col4.metric("Sin Aula Física (Historial)", tot_c - tot_a, delta_color="inverse")
 
-    tab_malla, tab_calendario, tab_salas, tab_criticos, tab_exportar = st.tabs([
-        "📋 Malla Consolidada Clean", "📅 Agenda por Sala", "🏫 Uso de Infraestructura", "🚨 Cursos No Asignados", "📥 Descarga del Libro"
+    # Pestañas principales
+    tab_malla, tab_calendario, tab_salas, tab_heatmap, tab_criticos, tab_exportar = st.tabs([
+        "📋 Malla Filtrada", "📅 Agenda por Sala (Rango)", "🏫 Utilización de Infraestructura", "🔥 Mapa de Calor", "🚨 Cursos No Asignados", "📥 Descarga del Libro"
     ])
 
     with tab_malla:
-        st.dataframe(df_malla, use_container_width=True, hide_index=True)
+        st.caption(f"Mostrando cursos activos detectados en la ventana: **{tipo_ventana}**")
+        st.dataframe(df_malla_filtrada_tiempo, use_container_width=True, hide_index=True)
 
     with tab_calendario:
-        st.subheader("Cronograma Semanal de Espacios")
-        aulas_ocupadas = sorted([str(s) for s in df_malla["SALA"].unique() if str(s) != "SIN SALA"])
+        st.subheader("Cronograma de Espacios con Vigencia de Fechas")
+        aulas_ocupadas = sorted([str(s) for s in df_malla_filtrada_tiempo["SALA"].unique() if str(s) != "SIN SALA"])
+        
         if aulas_ocupadas:
             sala_sel = st.selectbox("Seleccione el espacio físico a auditar:", aulas_ocupadas)
-            df_sala_filtrado = df_malla[df_malla["SALA"] == sala_sel]
+            df_sala_filtrado = df_malla_filtrada_tiempo[df_malla_filtrada_tiempo["SALA"] == sala_sel]
             
             if not df_sala_filtrado.empty:
-                df_sala_filtrado["DISPLAY"] = df_sala_filtrado["MATERIA"] + " (Ef: " + df_sala_filtrado["EFICIENCIA_%"].astype(str) + "%)"
+                # Modificación: Visualizar explícitamente las fechas y vigencia del curso en el bloque
+                df_sala_filtrado["DISPLAY"] = (
+                    df_sala_filtrado["MATERIA"] + 
+                    " [" + df_sala_filtrado["FECHA INICIO"].astype(str) + " a " + df_sala_filtrado["FECHA FIN"].astype(str) + "]" +
+                    " (Ef: " + df_sala_filtrado["EFICIENCIA_%"].astype(str) + "%)"
+                )
                 try:
                     df_pivot = pd.pivot_table(
                         df_sala_filtrado, index="HORARIO", columns="DIA", values="DISPLAY",
-                        aggfunc=lambda x: " / ".join(sorted(list(map(str, x.unique()))))
+                        aggfunc=lambda x: " / \n ".join(sorted(list(map(str, x.unique()))))
                     )
                     dias_ordenados = [d for d in ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"] if d in df_pivot.columns]
                     df_pivot = df_pivot.reindex(columns=dias_ordenados).sort_index()
                     st.dataframe(df_pivot, use_container_width=True)
                 except Exception:
                     st.dataframe(df_sala_filtrado[["DIA", "HORARIO", "DISPLAY"]], use_container_width=True, hide_index=True)
+        else:
+            st.info("No se registran salas ocupadas en la combinación temporal seleccionada.")
 
     with tab_salas:
-        st.subheader("📊 Analíticas de Ocupación Real")
-        if not df_salas.empty:
+        st.subheader(f"📊 Analíticas de Ocupación Real para: {tipo_ventana}")
+        if not df_salas_dinamicas.empty:
             m1, m2 = st.columns(2)
-            m1.metric("Promedio de Utilización de Horas Campus", f"{round(df_salas['% Utilización'].mean(), 1)}%")
-            max_row = df_salas.loc[df_salas["BLOQUES_OCUPADOS"].idxmax()]
-            m2.metric("Aula Más Demandada (Bloques)", f"{max_row['EDIFICIO']}-{max_row['SALA']}", f"{max_row['% Utilización']}% Uso")
+            m1.metric("Promedio de Utilización Campus en esta Ventana", f"{round(df_salas_dinamicas['% Utilización'].mean(), 1)}%")
+            max_row = df_salas_dinamicas.loc[df_salas_dinamicas["BLOQUES_OCUPADOS"].idxmax()]
+            m2.metric("Aula Más Solicitada (Bloques contados)", f"{max_row['EDIFICIO']}-{max_row['SALA']}", f"{max_row['% Utilización']}% Uso")
             
-            st.bar_chart(df_salas, x="SALA", y="% Utilización", color="EDIFICIO", use_container_width=True)
-            st.dataframe(df_salas, use_container_width=True, hide_index=True)
+            st.bar_chart(df_salas_dinamicas, x="SALA", y="% Utilización", color="EDIFICIO", use_container_width=True)
+            st.dataframe(df_salas_dinamicas, use_container_width=True, hide_index=True)
+
+    with tab_heatmap:
+        st.subheader("🔥 Mapa de Calor de Ocupación por Edificio y Horario")
+        st.caption("Visualiza los puntos críticos y niveles de saturación de la infraestructura según la ventana temporal activa.")
+        
+        if not df_malla_filtrada_tiempo.empty and "EDIFICIO" in df_malla_filtrada_tiempo.columns:
+            df_heat_raw = df_malla_filtrada_tiempo[
+                df_malla_filtrada_tiempo["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"]) & 
+                (df_malla_filtrada_tiempo["EDIFICIO"] != "N/A")
+            ]
+            
+            if not df_heat_raw.empty:
+                df_pivot_heat = pd.crosstab(
+                    index=df_heat_raw["HORARIO"],
+                    columns=df_heat_raw["EDIFICIO"]
+                )
+                st.heatmap(df_pivot_heat, color_scheme="reds")
+                st.caption("💡 Tonos más oscuros representan mayor concentración de secciones paralelas dictándose en ese edificio.")
+            else:
+                st.info("Sin datos suficientes en esta ventana temporal para dibujar el mapa de calor.")
+        else:
+            st.info("Cargue datos de programación para activar el mapa térmico.")
 
     with tab_criticos:
-        df_sin_sala = df_malla[df_malla["ESTADO"] == "SIN SALA"] if "ESTADO" in df_malla.columns else pd.DataFrame()
+        df_sin_sala = df_malla_completa[df_malla_completa["ESTADO"] == "SIN SALA"]
         if not df_sin_sala.empty:
             c_izq, c_der = st.columns([2, 1])
             with c_izq:
-                st.dataframe(df_sin_sala[["MATERIA", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"]], use_container_width=True, hide_index=True)
+                st.dataframe(df_sin_sala[["MATERIA", "CUPOS", "FECHA INICIO", "FECHA FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"]], use_container_width=True, hide_index=True)
             with c_der:
-                st.markdown("**Frenos de Asignación por Materia**")
-                st.dataframe(df_rechazos, use_container_width=True, hide_index=True)
+                st.markdown("**Frenos de Asignación acumulados por Materia**")
+                st.dataframe(esc_state["rechazos_consolidados"], use_container_width=True, hide_index=True)
         else:
-            st.success("🎉 ¡Excelente! Cero rechazos reportados para esta composición del escenario.")
+            st.success("🎉 ¡Excelente! Cero rechazos históricos reportados en el escenario.")
 
     with tab_exportar:
         st.subheader("Auditoría de Configuración e Historial")
         
-        # 📌 PREPARACIÓN Y CORRECCIÓN DE LA HOJA PRINCIPAL
-        df_exportable = df_malla.copy()
-        
-        # Renombrar columnas internas a las solicitadas para el informe formal
-        columnas_renombrar = {
-            "CAPACIDAD_SALA": "CAPACIDAD DE LA SALA",
-            "EFICIENCIA_%": "% OCUPACIÓN SALA"
-        }
+        df_exportable = df_malla_completa.copy()
+        columnas_renombrar = {"CAPACIDAD_SALA": "CAPACIDAD DE LA SALA", "EFICIENCIA_%": "% OCUPACIÓN SALA"}
         df_exportable = df_exportable.rename(columns=columnas_renombrar)
         
-        # Reordenamiento estético: Desplazar columnas de control operacional al final
-        columnas_control = ["ESTADO", "MOTIVO_RECHAZO", "CORRIDA_ID"]
+        columnas_control = ["ESTADO", "MOTIVO_RECHAZO", "CORRIDA_ID", "_F_INI_INTERNAL", "_F_FIN_INTERNAL"]
         columnas_ordenadas = [c for c in df_exportable.columns if c not in columnas_control]
-        columnas_ordenadas += [c for c in columnas_control if c in df_exportable.columns]
         df_exportable = df_exportable[columnas_ordenadas]
 
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             df_exportable.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
-            df_salas.to_excel(writer, sheet_name="Uso_Salas_Analitico", index=False)
-            df_rechazos.to_excel(writer, sheet_name="Rechazos_Por_Materia", index=False)
+            df_salas_dinamicas.to_excel(writer, sheet_name="Uso_Salas_Analitico", index=False)
+            esc_state["rechazos_consolidados"].to_excel(writer, sheet_name="Rechazos_Por_Materia", index=False)
             
             log_corridas = []
             for r in esc_state["corridas_historicas"]:
@@ -292,10 +401,11 @@ if not esc_state["malla_consolidada"].empty:
         st.download_button(
             label="📥 Descargar Libro de Planificación Certificado (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=f"Reporte_Consolidado_Eficiente.xlsx",
+            file_name=f"Reporte_Consolidado_UAndes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+# Botón estructural para resetear la memoria de la app
 if st.sidebar.button("Limpiar Todo y Reiniciar Sistema"):
     if "df_total_cursos_cache" in st.session_state:
         del st.session_state["df_total_cursos_cache"]
