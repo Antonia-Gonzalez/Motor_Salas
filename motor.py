@@ -192,4 +192,34 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             ocupacion_edificios_counter[mejor_s["EDIFICIO"]] = ocupacion_edificios_counter.get(mejor_s["EDIFICIO"], 0) + 1
             if lc_actual != "": lideres_cruzados_asignados[clave_ancla] = mejor_s
             asignados_esta_corrida += 1
-            malla.append({**c, "SALA": mejor_s["SALA"], "EDIFICIO": mejor_s["EDIFICIO"], "TIPO DE SALA": mejor_s.get("TIPO DE SALA", "N/A"), "ESTADO": "ASIGNADO", "MOTIVO_RECHAZO
+            malla.append({**c, "SALA": mejor_s["SALA"], "EDIFICIO": mejor_s["EDIFICIO"], "TIPO DE SALA": mejor_s.get("TIPO DE SALA", "N/A"), "ESTADO": "ASIGNADO", "MOTIVO_RECHAZO": "N/A"})
+        else:
+            malla.append({**c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO DE SALA": "N/A", "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": "Capacidad insuficiente o colisión"})
+
+    df_res = pd.DataFrame(malla)
+    
+    metricas_infra = []
+    for s in lista_salas:
+        occ = ocupacion_salas_counter.get(s["SALA_ID"], 0)
+        metricas_infra.append({
+            "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"], "CAPACIDAD": s["CAPACIDAD"], 
+            "BLOQUES_OCUPADOS": occ, "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, 50 - occ)
+        })
+    df_metricas_salas = pd.DataFrame(metricas_infra)
+
+    df_sin_sala = df_res[df_res["ESTADO"] == "SIN SALA"]
+    df_rech = df_sin_sala.groupby("CARRERA").size().reset_index(name="sin_sala") if not df_sin_sala.empty else pd.DataFrame(columns=["CARRERA", "sin_sala"])
+
+    resumen = {
+        "total_cursos": len(cursos), "total_asignadas": asignados_esta_corrida,
+        "porcentaje_asignacion": round((asignados_esta_corrida / len(cursos) * 100), 2) if len(cursos) > 0 else 0,
+        "sin_sala": len(cursos) - asignados_esta_corrida
+    }
+
+    return {
+        "malla": df_res,
+        "ocupacion": ocupacion,
+        "resumen": resumen,
+        "metricas": df_metricas_salas,
+        "rechazos": df_rech
+    }
