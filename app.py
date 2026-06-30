@@ -8,7 +8,7 @@ import os
 from motor import ejecutar_asignacion_escenario
 
 st.set_page_config(layout="wide", page_title="🏛️ Sistema de Planificación", page_icon="🏛️")
-st.title("🏛️ Sistema Profesional de Asignación de Salas")
+st.title("🏛️ Sistema de Asignación de Salas UAndes")
 
 if "planificacion" not in st.session_state:
     st.session_state["planificacion"] = None
@@ -38,7 +38,7 @@ else:
 # =========================================================
 # FLUJO DE ENTRADA DE DATOS Y PROCESAMIENTO
 # =========================================================
-archivo_mem = st.file_uploader("📂 Subir Programación Académica Semanal (.xlsx)", type=["xlsx"])
+archivo_mem = st.file_uploader("📂 Subir 'Programación académica (.xlsx)'", type=["xlsx"])
 
 if archivo_mem and salas_seleccionadas:
     if st.button("🚀 Inicializar Optimización Global"):
