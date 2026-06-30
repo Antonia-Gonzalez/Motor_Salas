@@ -4,7 +4,7 @@ import pandas as pd
 import re
 
 DOCT_ONLY_POSTGRADO = ["DOCT", "DOCT II"]
-KIN_EXCLUSIVE_ROOMS = ["UDS 201", "SIM KINE 2"]  # 📌 Se incluye SIM KINE 2 en la lista de exclusividad
+KIN_EXCLUSIVE_ROOMS = ["UDS 201", "SIM KINE 2"]
 INGENIERIAS = ["ICA", "ICC", "ICE", "ICI", "ING", "INM", "IOC"]
 ADMIN = ["ADM", "DEM", "DER", "EAD", "EAI", "EAM", "ECN", "MAD"]
 TIPOS_PERMITIDOS = ["HIBR", "CLAS", "EXAM", "PRBA", "AYUD"]
@@ -31,19 +31,33 @@ def sala_valida(curso, sala):
     origen = curso.get("ORIGEN_BASE")
     if sala_name in DOCT_ONLY_POSTGRADO: return origen == "POSTGRADO"
     
-    # 📌 Restricción estricta de exclusividad recíproca para Kinesiología
     if materia == "KIN": return sala_name in KIN_EXCLUSIVE_ROOMS
     if sala_name in KIN_EXCLUSIVE_ROOMS: return materia == "KIN"
     return True
 
-def colision(dia, horario, sala_id, ocupacion, lista_cruzada_actual=""):
-    if (sala_id, dia, horario) in ocupacion:
-        info_ocupante = ocupacion[(sala_id, dia, horario)]
-        if (lista_cruzada_actual != "" and 
-            isinstance(info_ocupante, dict) and 
-            info_ocupante.get("LISTA_CRUZADA") == lista_cruzada_actual):
-            return False
-        return True
+def colision(dia, horario, sala_id, fecha_ini, fecha_fin, ocupacion, lista_cruzada_actual=""):
+    """
+    Verifica si existe un traslape de fechas para una misma sala, día y horario.
+    Si las fechas no están definidas, asume que dura todo el periodo y evalúa colisión tradicional.
+    """
+    clave = (sala_id, dia, horario)
+    if clave in ocupacion:
+        # Recorremos todos los cursos agendados en este bloque específico
+        for info_ocupante in ocupacion[clave]:
+            # Protección para Listas Cruzadas
+            if (lista_cruzada_actual != "" and 
+                isinstance(info_ocupante, dict) and 
+                info_ocupante.get("LISTA_CRUZADA") == lista_cruzada_actual):
+                continue
+            
+            # Si alguno de los dos registros carece de fechas, colisionan por defecto (bloqueo total)
+            if pd.isna(fecha_ini) or pd.isna(fecha_fin) or pd.isna(info_ocupante["FECHA_INICIO"]) or pd.isna(info_ocupante["FECHA_FIN"]):
+                return True
+            
+            # Lógica matemática de traslape de intervalos (Fechas)
+            # Hay colisión si NO se cumple que (Fin_Nuevo < Inicio_Existente) O (Inicio_Nuevo > Fin_Existente)
+            if not (fecha_fin < info_ocupante["FECHA_INICIO"] or fecha_ini > info_ocupante["FECHA_FIN"]):
+                return True
     return False
 
 def score_sala(curso, sala, occ_sala, occ_edif, cupos_conjunto, relax_level):
@@ -68,8 +82,8 @@ def score_sala(curso, sala, occ_sala, occ_edif, cupos_conjunto, relax_level):
         elif "AYUD" in tipo: penalizacion_base += 3
 
     score = penalizacion_base * factor_atenuador
-    desperdidio = sala["CAPACIDAD"] - cupos_conjunto
-    score += desperdidio * 0.05
+    desperdicio = sala["CAPACIDAD"] - cupos_conjunto
+    score += desperdicio * 0.05
     score += occ_sala * 0.2 + occ_edif * 0.5
     return score
 
@@ -91,6 +105,21 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         dict_infra_lookup[str(s["SALA"]).strip().upper()] = s
 
     df_origen = df_cursos.copy()
+    
+    # Homologación y conversión segura de las columnas de fecha del Excel
+    col_inicio = "FECHA INICIO" if "FECHA INICIO" in df_origen.columns else ("FECHA_INICIO" if "FECHA_INICIO" in df_origen.columns else None)
+    col_fin = "FECHA FIN" if "FECHA FIN" in df_origen.columns else ("FECHA_FIN" if "FECHA_FIN" in df_origen.columns else None)
+    
+    if col_inicio:
+        df_origen["FECHA_INICIO_DT"] = pd.to_datetime(df_origen[col_inicio], errors='coerce')
+    else:
+        df_origen["FECHA_INICIO_DT"] = pd.NaT
+        
+    if col_fin:
+        df_origen["FECHA_FIN_DT"] = pd.to_datetime(df_origen[col_fin], errors='coerce')
+    else:
+        df_origen["FECHA_FIN_DT"] = pd.NaT
+
     if "TIPO" in df_origen.columns:
         df_origen["TIPO"] = df_origen["TIPO"].fillna("DESCONOCIDO").astype(str)
         mascara_permitidos = df_origen["TIPO"].str.upper().apply(lambda x: any(t in x for t in TIPOS_PERMITIDOS))
@@ -135,43 +164,59 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
 
     cursos = df_procesable.to_dict("records")
 
+    # Inicialización estructurada del diccionario de ocupación previa
     ocupacion = ocupacion_previa.copy() if ocupacion_previa is not None else {}
     ocupacion_salas_counter = {}
     ocupacion_edificios_counter = {}
 
-    for (sala_id, _, _), info in ocupacion.items():
-        ocupacion_salas_counter[sala_id] = ocupacion_salas_counter.get(sala_id, 0) + 1
-        ocupacion_edificios_counter[sala_id.split("_")[0]] = ocupacion_edificios_counter.get(sala_id.split("_")[0], 0) + 1
+    for (sala_id, _, _), lista_cursos_bloque in ocupacion.items():
+        if not isinstance(lista_cursos_bloque, list):
+            # Migración/Soporte en caso de que venga un diccionario plano antiguo
+            ocupacion[(sala_id, _, _)] = [lista_cursos_bloque]
+            lista_cursos_bloque = [lista_cursos_bloque]
+            
+        for info in lista_cursos_bloque:
+            ocupacion_salas_counter[sala_id] = ocupacion_salas_counter.get(sala_id, 0) + 1
+            ocupacion_edificios_counter[sala_id.split("_")[0]] = ocupacion_edificios_counter.get(sala_id.split("_")[0], 0) + 1
 
     cursos_regulares_a_procesar = []
     malla_congelados = []
     asignados_esta_corrida = 0
 
+    # ---- PROCESAMIENTO DE ASIGNACIONES MANUALES (RESPETADAS POR DISEÑO) ----
     for c in cursos:
         dia_curso = c.get("DIA")
         hora_curso = c.get("HORARIO")
         nrc_actual = str(c.get("NRC", c.get("N°", "N/A")))
         sala_original_excel = str(c.get("SALA", "")).strip().upper() if pd.notna(c.get("SALA")) else ""
+        f_ini = c.get("FECHA_INICIO_DT")
+        f_fin = c.get("FECHA_FIN_DT")
         
         if sala_original_excel != "" and sala_original_excel != "NAN" and sala_original_excel != "SIN SALA":
             if sala_original_excel in dict_infra_lookup:
                 s_infra = dict_infra_lookup[sala_original_excel]
                 s_id = s_infra["SALA_ID"]
+                clave_bloque = (s_id, dia_curso, hora_curso)
                 
                 eficiencia_pct = round((int(c.get("CUPOS", 0)) / max(1, s_infra["CAPACIDAD"])) * 100, 1)
 
-                ocupacion[(s_id, dia_curso, hora_curso)] = {
+                if clave_bloque not in ocupacion:
+                    ocupacion[clave_bloque] = []
+                
+                ocupacion[clave_bloque].append({
                     "IDENTIFICADOR": nrc_actual, "LISTA_CRUZADA": c.get("LISTA CRUZADA", ""),
                     "CORRIDA": f"MANUAL_{id_corrida}", "MATERIA": c["MATERIA"], 
-                    "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0))
-                }
+                    "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), 
+                    "CUPOS": int(c.get("CUPOS", 0)), "FECHA_INICIO": f_ini, "FECHA_FIN": f_fin
+                })
+                
                 ocupacion_salas_counter[s_id] = ocupacion_salas_counter.get(s_id, 0) + 1
                 ocupacion_edificios_counter[s_infra["EDIFICIO"]] = ocupacion_edificios_counter.get(s_infra["EDIFICIO"], 0) + 1
                 
                 malla_congelados.append({
                     **c, "SALA": s_infra["SALA"], "EDIFICIO": s_infra["EDIFICIO"], 
                     "TIPO DE SALA": s_infra.get("TIPO DE SALA", "N/A"), 
-                    "CAPACIDAD_SALA": s_infra["CAPACIDAD"],  # 📌 Adición de capacidad real
+                    "CAPACIDAD_SALA": s_infra["CAPACIDAD"], 
                     "EFICIENCIA_%": eficiencia_pct,
                     "ESTADO": "ASIGNADO_MANUAL", "MOTIVO_RECHAZO": "Respetado por diseño especial"
                 })
@@ -179,15 +224,20 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             else:
                 s_id_virtual = f"EXTERNA_{sala_original_excel}".replace(" ", "_")
                 edificio_virtual = str(c.get("EDIFICIO", "EXTERNO")).strip().upper() if pd.notna(c.get("EDIFICIO")) else "EXTERNO"
+                clave_bloque_v = (s_id_virtual, dia_curso, hora_curso)
                 
-                ocupacion[(s_id_virtual, dia_curso, hora_curso)] = {
+                if clave_bloque_v not in ocupacion:
+                    ocupacion[clave_bloque_v] = []
+                    
+                ocupacion[clave_bloque_v].append({
                     "IDENTIFICADOR": nrc_actual, "LISTA_CRUZADA": c.get("LISTA CRUZADA", ""),
-                    "CORRIDA": f"ESPECIAL_EXTERNA", "MATERIA": c["MATERIA"], "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0))
-                }
+                    "CORRIDA": f"ESPECIAL_EXTERNA", "MATERIA": c["MATERIA"], "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), 
+                    "TIPO": c.get("TIPO", "CLAS"), "CUPOS": int(c.get("CUPOS", 0)), "FECHA_INICIO": f_ini, "FECHA_FIN": f_fin
+                })
                 malla_congelados.append({
                     **c, "SALA": sala_original_excel, "EDIFICIO": edificio_virtual, 
                     "TIPO DE SALA": "LABORATORIO/ESPECIAL", 
-                    "CAPACIDAD_SALA": int(c.get("CUPOS", 0)),  # 📌 Asignación virtual balanceada al curso
+                    "CAPACIDAD_SALA": int(c.get("CUPOS", 0)), 
                     "EFICIENCIA_%": 100.0,
                     "ESTADO": "ASIGNADO_MANUAL", "MOTIVO_RECHAZO": "Espacio protegido de una sola vez"
                 })
@@ -203,6 +253,7 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
     malla_final = list(malla_congelados)
     lideres_cruzados_asignados = {}
 
+    # ---- EJECUCIÓN DEL ALGORITMO DE ASIGNACIÓN INTELIGENTE ----
     for c in cursos_regulares_a_procesar:
         mejor_s = None
         mejor_score = 1e9
@@ -211,6 +262,8 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         dia_curso = c.get("DIA")
         hora_curso = c.get("HORARIO")
         lc_actual = c.get("LISTA CRUZADA")
+        f_ini = c.get("FECHA_INICIO_DT")
+        f_fin = c.get("FECHA_FIN_DT")
 
         if dia_curso == "SIN DIA" or hora_curso == "SIN HORARIO":
             malla_final.append({**c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO DE SALA": "N/A", "CAPACIDAD_SALA": 0, "EFICIENCIA_%": 0.0, "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": "Falta definición horaria"})
@@ -230,8 +283,11 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             else:
                 s1, s2 = lista_salas, []
 
+            # Evaluación en el bloque de salas preferidas
             for s in s1:
-                if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s) or colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion, lc_actual): continue
+                if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s): continue
+                # Se incorpora la nueva firma de colisión con análisis de fechas
+                if colision(dia_curso, hora_curso, s["SALA_ID"], f_ini, f_fin, ocupacion, lc_actual): continue
                 
                 calc_eficiencia = (cupos_curso / s["CAPACIDAD"]) * 100
                 if calc_eficiencia < min_eficiencia: continue
@@ -241,9 +297,11 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
                     mejor_score, mejor_s = sc, s
                     mejor_eficiencia = round(calc_eficiencia, 1)
                     
+            # Evaluación de escape en otras salas si no se encontró en el bloque preferido
             if mejor_s is None and s2:
                 for s in s2:
-                    if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s) or colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion, lc_actual): continue
+                    if s["CAPACIDAD"] < cupos_curso or not sala_valida(c, s): continue
+                    if colision(dia_curso, hora_curso, s["SALA_ID"], f_ini, f_fin, ocupacion, lc_actual): continue
                     
                     calc_eficiencia = (cupos_curso / s["CAPACIDAD"]) * 100
                     if calc_eficiencia < min_eficiencia: continue
@@ -254,11 +312,16 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
                         mejor_eficiencia = round(calc_eficiencia, 1)
 
         if mejor_s:
-            ocupacion[(mejor_s["SALA_ID"], dia_curso, hora_curso)] = {
+            clave_bloque = (mejor_s["SALA_ID"], dia_curso, hora_curso)
+            if clave_bloque not in ocupacion:
+                ocupacion[clave_bloque] = []
+                
+            ocupacion[clave_bloque].append({
                 "IDENTIFICADOR": str(c.get("NRC", "N/A")), "LISTA_CRUZADA": lc_actual,
                 "CORRIDA": id_corrida, "MATERIA": c["MATERIA"], 
-                "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), "CUPOS": cupos_curso
-            }
+                "ORIGEN": c.get("ORIGEN_BASE", "PREGRADO"), "TIPO": c.get("TIPO", "CLAS"), 
+                "CUPOS": cupos_curso, "FECHA_INICIO": f_ini, "FECHA_FIN": f_fin
+            })
             ocupacion_salas_counter[mejor_s["SALA_ID"]] = ocupacion_salas_counter.get(mejor_s["SALA_ID"], 0) + 1
             ocupacion_edificios_counter[mejor_s["EDIFICIO"]] = ocupacion_edificios_counter.get(mejor_s["EDIFICIO"], 0) + 1
             if lc_actual != "": lideres_cruzados_asignados[clave_ancla] = mejor_s
@@ -266,23 +329,24 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
             malla_final.append({
                 **c, "SALA": mejor_s["SALA"], "EDIFICIO": mejor_s["EDIFICIO"], 
                 "TIPO DE SALA": mejor_s.get("TIPO DE SALA", "N/A"), 
-                "CAPACIDAD_SALA": mejor_s["CAPACIDAD"],  # 📌 Registro institucional
+                "CAPACIDAD_SALA": mejor_s["CAPACIDAD"], 
                 "EFICIENCIA_%": mejor_eficiencia, "ESTADO": "ASIGNADO", "MOTIVO_RECHAZO": "N/A"
             })
         else:
             malla_final.append({
                 **c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO DE SALA": "N/A", 
                 "CAPACIDAD_SALA": 0, "EFICIENCIA_%": 0.0, "ESTADO": "SIN SALA", 
-                "MOTIVO_RECHAZO": "Capacidad/Eficiencia insuficiente o colisión con espacio protegido"
+                "MOTIVO_RECHAZO": "Capacidad/Eficiencia insuficiente o colisión temporal con rango de fechas"
             })
 
     df_res = pd.DataFrame(malla_final)
     
-    # ⚠️ "CAPACIDAD_SALA" y "EFICIENCIA_%" se mantienen seguras y se conservan para el output
-    columnas_a_remover = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "CARRERA", "ID_ASIGNACION_UNICO", "_p_origen", "_p_tipo"]
+    # Limpieza segura de columnas de control interno
+    columnas_a_remover = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO", "CARRERA", "ID_ASIGNACION_UNICO", "_p_origen", "_p_tipo", "FECHA_INICIO_DT", "FECHA_FIN_DT"]
     columnas_existentes_a_remover = [col for col in columnas_a_remover if col in df_res.columns]
     df_res = df_res.drop(columns=columnas_existentes_a_remover)
 
+    # Cálculo analítico final de la ocupación total por infraestructura física
     metricas_infra = []
     for s in lista_salas:
         occ = ocupacion_salas_counter.get(s["SALA_ID"], 0)
