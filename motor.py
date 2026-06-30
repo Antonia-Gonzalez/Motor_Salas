@@ -61,8 +61,17 @@ def sala_valida(curso, sala):
 
     return True
 
-def colision(dia, horario, sala_id, ocupacion):
-    return (sala_id, dia, horario) in ocupacion
+def colision(dia, horario, sala_id, ocupacion, lista_cruzada_actual=""):
+    # Si la coordenada espacio-tiempo ya tiene un registro...
+    if (sala_id, dia, horario) in ocupacion:
+        info_ocupante = ocupacion[(sala_id, dia, horario)]
+        # Si ambas asignaturas comparten la misma lista cruzada válida, NO es colisión (cohabitan)
+        if (lista_cruzada_actual != "" and 
+            isinstance(info_ocupante, dict) and 
+            info_ocupante.get("LISTA_CRUZADA") == lista_cruzada_actual):
+            return False
+        return True
+    return False
 
 # =========================================================
 # CAPA 2: SCORING (SOFT CONSTRAINTS + RELAJACIÓN)
@@ -175,13 +184,31 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
         # Salvaguarda si tras aplicar el filtro estricto la tabla queda totalmente vacía
         return pd.DataFrame(), {}, pd.DataFrame(), {"total_cursos": 0, "total_asignadas": 0, "porcentaje_asignacion": 0, "sin_sala": 0}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+    # Sanitizar explícitamente la columna de listas cruzadas sin borrar datos anteriores
+    if "LISTA CRUZADA" in df_procesable.columns:
+        df_procesable["LISTA CRUZADA"] = df_procesable["LISTA CRUZADA"].fillna("").astype(str).str.strip()
+    else:
+        df_procesable["LISTA CRUZADA"] = ""
+
     df_procesable["_p_origen"] = np.where(df_procesable["ORIGEN_BASE"] == "POSTGRADO", 1, 2)
     df_procesable["_p_tipo"] = df_procesable.apply(
         lambda r: prioridad_tipo(r.get("TIPO", ""), r.get("ORIGEN_BASE", "")), axis=1
     )
 
+    # -----------------------------------------------------------------
+    # 🧬 CÁLCULO SUMATORIO DE CUPOS COMPARTIDOS (LISTAS CRUZADAS)
+    # -----------------------------------------------------------------
+    df_procesable["CUPOS"] = pd.to_numeric(df_procesable["CUPOS"], errors='coerce').fillna(0).astype(int)
+    df_procesable["CUPOS_TOTALES_CONJUNTO"] = df_procesable["CUPOS"]
+
+    mask_cruzadas = (df_procesable["LISTA CRUZADA"] != "")
+    if mask_cruzadas.any():
+        cupos_sumados = df_procesable[mask_cruzadas].groupby(["LISTA CRUZADA", "DIA", "HORARIO"])["CUPOS"].transform("sum")
+        df_procesable.loc[mask_cruzadas, "CUPOS_TOTALES_CONJUNTO"] = cupos_sumados
+
+    # Orden jerárquico modificado usando la métrica del conjunto agrupado
     df_procesable = df_procesable.sort_values(
-        by=["_p_origen", "_p_tipo", "CUPOS"], ascending=[True, True, False]
+        by=["_p_origen", "_p_tipo", "CUPOS_TOTALES_CONJUNTO"], ascending=[True, True, False]
     )
 
     cursos = df_procesable.to_dict("records")
@@ -192,13 +219,19 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
     ocupacion = {}
     malla = []
     asignados = 0
+    
+    # Registro de anclaje para asegurar que las colisiones autorizadas queden en la misma sala física
+    lideres_cruzados_asignados = {}
 
     for c in list(cursos):
         mejor_s = None
         mejor_score = 1e9
-        cupos_curso = c.get("CUPOS", 0)
+        
+        # Evaluamos basándonos en los alumnos agrupados si es lista cruzada, si no, usa sus cupos normales
+        cupos_curso = int(c.get("CUPOS_TOTALES_CONJUNTO", c.get("CUPOS", 0)))
         dia_curso = c.get("DIA")
         hora_curso = c.get("HORARIO")
+        lc_actual = c.get("LISTA CRUZADA")
 
         if dia_curso == "SIN DIA" or hora_curso == "SIN HORARIO":
             malla.append({
@@ -207,26 +240,41 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
             })
             continue
 
-        for s in lista_salas:
-            if s["CAPACIDAD"] < cupos_curso:
-                continue
-            if not sala_valida(c, s):
-                continue
-            if colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion):
-                continue
+        # Regla Ancla: ¿El líder o hermano de esta lista cruzada ya reservó una sala en este bloque?
+        clave_ancla = (lc_actual, dia_curso, hora_curso)
+        if lc_actual != "" and clave_ancla in lideres_cruzados_asignados:
+            mejor_s = lideres_cruzados_asignados[clave_ancla]
+        else:
+            # Búsqueda normal e iterativa evaluando la capacidad total requerida
+            for s in lista_salas:
+                if s["CAPACIDAD"] < cupos_curso:
+                    continue
+                if not sala_valida(c, s):
+                    continue
+                if colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion, lc_actual):
+                    continue
 
-            occ_sala = sum(1 for k in ocupacion if k[0] == s["SALA_ID"])
-            occ_edif = sum(1 for k in ocupacion if k[0].startswith(s["EDIFICIO"]))
+                occ_sala = sum(1 for k in ocupacion if k[0] == s["SALA_ID"])
+                occ_edif = sum(1 for k in ocupacion if k[0].startswith(s["EDIFICIO"]))
 
-            sc = score_sala(c, s, occ_sala, occ_edif, relax_level)
+                sc = score_sala(c, s, occ_sala, occ_edif, relax_level)
 
-            if sc < mejor_score:
-                mejor_score = sc
-                mejor_s = s
+                if sc < mejor_score:
+                    mejor_score = sc
+                    mejor_s = s
 
         if mejor_s:
             identificador_curso = c.get("NRC", c.get("N°", "N/A"))
-            ocupacion[(mejor_s["SALA_ID"], dia_curso, hora_curso)] = identificador_curso
+            
+            # Guardamos la estructura en la ocupación global, indexando la lista cruzada para autorizar cohabitaciones
+            ocupacion[(mejor_s["SALA_ID"], dia_curso, hora_curso)] = {
+                "IDENTIFICADOR": identificador_curso,
+                "LISTA_CRUZADA": lc_actual
+            }
+            
+            if lc_actual != "":
+                lideres_cruzados_asignados[clave_ancla] = mejor_s
+                
             asignados += 1
 
             malla.append({
@@ -244,7 +292,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
                 "EDIFICIO": "N/A", 
                 "TIPO DE SALA": "N/A",
                 "ESTADO": "SIN SALA", 
-                "MOTIVO_RECHAZO": "Capacidad insuficiente o colisión de horario insalvable"
+                "MOTIVO_RECHAZO": f"Capacidad insuficiente para conjunto sumado ({cupos_curso} alumnos) o colisión insalvable"
             })
 
     df_res = pd.DataFrame(malla)
