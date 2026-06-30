@@ -69,18 +69,35 @@ def score_sala(curso, sala, occ_sala, occ_edif, cupos_conjunto, relax_level):
     factor_atenuador = relax_level / 100.0
     penalizacion_base = 0
 
-    if origen == "POSTGRADO":
-        if "HIBR" in tipo: penalizacion_base += 0 if tipo_sala_infra in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
-        elif "CLAS" in tipo: penalizacion_base += 0 if (tipo_sala_infra in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
-        elif "EXAM" in tipo or "PRBA" in tipo: penalizacion_base += 0 if tipo_sala_infra in ["PLANA", "STREAMING"] else 8
-        elif "AYUD" in tipo: penalizacion_base += 2 if tipo_sala_infra == "NORMAL" else 5
+    # =========================================================================
+    # REGLA DE RELAJACIÓN TOTAL (<= 85%): TECNOLOGÍA Y FORMATO LIBRE
+    # =========================================================================
+    if relax_level <= 85:
+        # Si el nivel es 85% o menos, la tecnología (Hyflex, Streaming) y el 
+        # formato (Auditorio, Plana, Gradas) entran en modo LIBRE. 
+        # No se penaliza ninguna combinación de espacio.
+        penalizacion_base = 0
     else:
-        if "CLAS" in tipo:
-            pref = edificio_preferido(materia)
-            penalizacion_base += pref.index(sala["EDIFICIO"]) if sala["EDIFICIO"] in pref else 10
-        elif "EXAM" in tipo or "PRBA" in tipo: penalizacion_base += 5
-        elif "AYUD" in tipo: penalizacion_base += 3
+        # Evaluación restrictiva estándar (Para niveles 90%, 95% o 100%)
+        if origen == "POSTGRADO":
+            if "HIBR" in tipo: 
+                penalizacion_base += 0 if tipo_sala_infra in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
+            elif "CLAS" in tipo: 
+                penalizacion_base += 0 if (tipo_sala_infra in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
+            elif "EXAM" in tipo or "PRBA" in tipo: 
+                penalizacion_base += 0 if tipo_sala_infra in ["PLANA", "STREAMING"] else 8
+            elif "AYUD" in tipo: 
+                penalizacion_base += 2 if tipo_sala_infra == "NORMAL" else 5
+        else:
+            if "CLAS" in tipo:
+                pref = edificio_preferido(materia)
+                penalizacion_base += pref.index(sala["EDIFICIO"]) if sala["EDIFICIO"] in pref else 10
+            elif "EXAM" in tipo or "PRBA" in tipo: 
+                penalizacion_base += 5
+            elif "AYUD" in tipo: 
+                penalizacion_base += 3
 
+    # Cálculo final del score combinando penalizaciones (si aplican), desperdicio y densidad
     score = penalizacion_base * factor_atenuador
     desperdicio = sala["CAPACIDAD"] - cupos_conjunto
     score += desperdicio * 0.05
