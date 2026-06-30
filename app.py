@@ -4,6 +4,7 @@ import pandas as pd
 import io
 import os
 import numpy as np
+import plotly.express as px
 
 from motor import ejecutar_asignacion_escenario
 
@@ -400,7 +401,24 @@ if not esc_state["malla_consolidada"].empty:
                     index=df_heat_raw["HORARIO"],
                     columns=df_heat_raw["EDIFICIO"]
                 )
-                st.heatmap(df_pivot_heat, color_scheme="reds")
+                df_pivot_heat = pd.crosstab(
+                    index=df_heat_raw["HORARIO"],
+                    columns=df_heat_raw["EDIFICIO"]
+                )
+
+                fig = px.imshow(
+                    df_pivot_heat,
+                    color_continuous_scale="Reds",
+                    aspect="auto",
+                    labels=dict(
+                        x="Edificio",
+                        y="Horario",
+                        color="Cursos"
+                    )
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
                 st.caption("💡 Tonos más oscuros representan mayor concentración de secciones paralelas dictándose en ese edificio.")
             else:
                 st.info("Sin datos suficientes en esta ventana temporal para dibujar el mapa de calor.")
