@@ -16,7 +16,7 @@ if "planificacion" not in st.session_state:
 # =========================================================
 # CONFIGURACIÓN Y PARÁMETROS INTERACTIVOS (SIDEBAR)
 # =========================================================
-st.sidebar.header("⚙️ Parámetros del Motor")
+st.sidebar.header("⚙️ Parámetros de la asignación")
 id_config = st.sidebar.text_input("ID de Planificación", value="ESC-2026")
 
 tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
@@ -43,7 +43,7 @@ else:
 # 📥 PASO 1: SUBIR EL ARCHIVO (Para poder leer los universos de filtros)
 # =========================================================
 st.markdown("### 📥 1. Cargar Programación Académica")
-archivo_mem = st.file_uploader("📂 Subir archivo de cursos (.xlsx)", type=["xlsx"])
+archivo_mem = st.file_uploader("📂 Subir archivo de 'Programación académica (.xlsx)'", type=["xlsx"])
 
 # Inicializamos variables de control
 df_cursos_prefiltrados = pd.DataFrame()
@@ -53,8 +53,8 @@ salas_prefiltradas = salas_seleccionadas_base
 # 🔍 PASO 2: FILTROS DINÁMICOS DE ENTRADA (PRE-ASIGNACIÓN)
 # =========================================================
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Filtros de Entrada (Pre-Asignación)")
-st.sidebar.caption("Selecciona aquí para limitar qué cursos y salas entrarán al motor.")
+st.sidebar.header("Filtros para la asignación de salas")
+st.sidebar.caption("Selecciona aquí para limitar qué cursos y salas entrarán al motor de asignación.")
 
 filtro_carrera = []
 filtro_edificio = []
@@ -108,7 +108,7 @@ else:
 # 🚀 PASO 3: EJECUCIÓN DEL MOTOR SOBRE LOS DATOS FILTRADOS
 # =========================================================
 if archivo_mem and not df_cursos_prefiltrados.empty:
-    st.markdown("### ⚙️ 2. Ejecutar Optimización")
+    st.markdown("### ⚙️ 2. Ejecutar asignación")
     if st.button("🚀 Inicializar Asignación de Salas (Solo Selección)"):
         with st.spinner("Procesando exclusivamente los cursos y espacios seleccionados..."):
             try:
@@ -164,7 +164,7 @@ if st.session_state["planificacion"] is not None:
     col4.metric("Secciones sin sala", meta.get("sin_sala", 0), delta_color="inverse")
     
     tab_malla, tab_calendario, tab_criticos, tab_exportar = st.tabs([
-        "📋 Malla Consolidada", "📅 Agenda por Sala Física", "🚨 Auditoría de Rechazos", "📥 Descargas"
+        "📋 Malla Consolidada", "📅 Agenda por Sala", "🚨Cursos no asignados", "📥 Descargas"
     ])
     
     with tab_malla:
