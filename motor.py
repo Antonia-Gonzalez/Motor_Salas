@@ -68,19 +68,22 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
     tipo = str(curso.get("TIPO", ""))
     materia = str(curso.get("MATERIA", ""))
     origen = curso.get("ORIGEN_BASE")
+    
+    # 📌 ADAPTACIÓN: Uso de la columna exacta 'TIPO DE SALA'
+    tipo_sala_infra = str(sala.get("TIPO DE SALA", "")).upper()
 
     score = 0
 
     # --- Lógica Postgrado ---
     if origen == "POSTGRADO":
         if "HIBR" in tipo:
-            score += 0 if sala["TIPO DE SALA"] in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
+            score += 0 if tipo_sala_infra in ["HYFLEX", "AUDITORIO", "AULA MAGNA"] else 10
         elif "CLAS" in tipo:
-            score += 0 if (sala["TIPO DE SALA"] in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
+            score += 0 if (tipo_sala_infra in ["STREAMING", "NORMAL"] and sala["EDIFICIO"] == "REL") else 8
         elif "EXAM" in tipo or "PRBA" in tipo:
-            score += 0 if sala["TIPO DE SALA"] in ["PLANA", "STREAMING"] else 8
+            score += 0 if tipo_sala_infra in ["PLANA", "STREAMING"] else 8
         elif "AYUD" in tipo:
-            score += 2 if sala["TIPO DE SALA"] == "NORMAL" else 5
+            score += 2 if tipo_sala_infra == "NORMAL" else 5
 
     # --- Lógica Pregrado ---
     else:
@@ -125,7 +128,6 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
 
     df_origen = pd.concat([df_post, df_pre], ignore_index=True)
     
-    # 📌 ADAPTACIÓN: Ahora la Carrera para los filtros y métricas es la columna 'MATERIA'
     if "MATERIA" in df_origen.columns:
         df_origen["CARRERA"] = df_origen["MATERIA"]
     else:
@@ -143,7 +145,6 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
             val_dia = item.get(dia)
             if pd.notna(val_dia) and str(val_dia).strip() != "" and "-" in str(val_dia):
                 nuevo_bloque = item.copy()
-                # 📌 Guardamos el día específico y el bloque horario en el registro
                 nuevo_bloque["DIA"] = dia
                 nuevo_bloque["HORARIO"] = str(val_dia).strip()
                 registros_planos.append(nuevo_bloque)
@@ -157,7 +158,6 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
 
     df_procesable = pd.DataFrame(registros_planos)
 
-    # Ranking institucional sobre la estructura aplanada
     df_procesable["_p_origen"] = np.where(df_procesable["ORIGEN_BASE"] == "POSTGRADO", 1, 2)
     df_procesable["_p_tipo"] = df_procesable.apply(
         lambda r: prioridad_tipo(r.get("TIPO", ""), r.get("ORIGEN_BASE", "")), axis=1
@@ -185,7 +185,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
 
         if dia_curso == "SIN DIA" or hora_curso == "SIN HORARIO":
             malla.append({
-                **c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO_SALA": "N/A",
+                **c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO DE SALA": "N/A",
                 "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": "Falta definición horaria en archivo origen"
             })
             continue
@@ -216,7 +216,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
                 **c, 
                 "SALA": mejor_s["SALA"], 
                 "EDIFICIO": mejor_s["EDIFICIO"],
-                "TIPO_SALA": mejor_s["TIPO_SALA"], 
+                "TIPO DE SALA": mejor_s.get("TIPO DE SALA", "N/A"), 
                 "ESTADO": "ASIGNADO", 
                 "MOTIVO_RECHAZO": "N/A"
             })
@@ -225,7 +225,7 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
                 **c, 
                 "SALA": "SIN SALA", 
                 "EDIFICIO": "N/A", 
-                "TIPO_SALA": "N/A",
+                "TIPO DE SALA": "N/A",
                 "ESTADO": "SIN SALA", 
                 "MOTIVO_RECHAZO": "Capacidad insuficiente o colisión de horario insalvable"
             })
@@ -258,5 +258,4 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
     else:
         df_rech = pd.DataFrame(columns=["CARRERA", "sin_sala"])
 
-    # 🔴 CONTRATO EXACTO CON EL UNPACK DE APP.PY (11 Objetos)
     return df_res, ocupacion, df_origen, resumen, df_s, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), df_rech
