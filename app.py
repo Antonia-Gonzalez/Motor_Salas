@@ -36,6 +36,27 @@ else:
     salas_seleccionadas = []
 
 # =========================================================
+# 🔍 CONTROLADORES DE FILTROS DINÁMICOS EN EL SIDEBAR
+# =========================================================
+filtro_carrera = []
+filtro_edificio = []
+filtro_sala = []
+
+if st.session_state["planificacion"] is not None:
+    st.sidebar.markdown("---")
+    st.sidebar.header("🔍 Filtros de Visualización")
+    df_origen_filtros = st.session_state["planificacion"]["malla"]
+    
+    # Extractores seguros de valores únicos para los componentes multi-select
+    carreras_unicas = sorted(df_origen_filtros["CARRERA"].dropna().unique()) if "CARRERA" in df_origen_filtros.columns else []
+    edificios_unicos = sorted([e for e in df_origen_filtros["EDIFICIO"].dropna().unique() if e != "N/A"]) if "EDIFICIO" in df_origen_filtros.columns else []
+    salas_unicas = sorted([s for s in df_origen_filtros["SALA"].dropna().unique() if s != "SIN SALA"]) if "SALA" in df_origen_filtros.columns else []
+    
+    filtro_carrera = st.sidebar.multiselect("Carreras:", carreras_unicas)
+    filtro_edificio = st.sidebar.multiselect("Edificios:", edificios_unicos)
+    filtro_sala = st.sidebar.multiselect("Salas:", salas_unicas)
+
+# =========================================================
 # FLUJO DE ENTRADA DE DATOS Y PROCESAMIENTO
 # =========================================================
 archivo_mem = st.file_uploader("📂 Subir 'Programación académica (.xlsx)'", type=["xlsx"])
@@ -57,6 +78,7 @@ if archivo_mem and salas_seleccionadas:
                     "malla": df_res, "metadata": resumen, "salas": df_s, "rechazos": df_rech
                 }
                 st.success("¡Asignación calculada óptimamente!")
+                st.rerun()
             except Exception as e:
                 st.error(f"Error crítico en el acoplamiento de datos: {str(e)}")
 
@@ -66,7 +88,17 @@ if archivo_mem and salas_seleccionadas:
 if st.session_state["planificacion"] is not None:
     plan = st.session_state["planificacion"]
     meta = plan["metadata"]
-    df_res_main = plan["malla"]
+    
+    # Construcción de la copia reactiva para el renderizado visual
+    df_visual = plan["malla"].copy()
+    
+    # Aplicación encadenada de filtros si existen selecciones del usuario
+    if filtro_carrera:
+        df_visual = df_visual[df_visual["CARRERA"].isin(filtro_carrera)]
+    if filtro_edificio:
+        df_visual = df_visual[df_visual["EDIFICIO"].isin(filtro_edificio)]
+    if filtro_sala:
+        df_visual = df_visual[df_visual["SALA"].isin(filtro_sala)]
     
     # 1. Indicadores de Desempeño Superiores (KPIs)
     col1, col2, col3, col4 = st.columns(4)
@@ -81,18 +113,18 @@ if st.session_state["planificacion"] is not None:
     ])
     
     with tab_malla:
-        st.markdown("##### Vista de Auditoría General de Planificación")
-        st.dataframe(df_res_main, use_container_width=True, hide_index=True)
+        st.markdown(f"##### Vista de Auditoría General de Planificación ({len(df_visual)} registros mostrados)")
+        st.dataframe(df_visual, use_container_width=True, hide_index=True)
         
     with tab_calendario:
         st.markdown("##### Agenda Horaria por Aula")
-        salas_disponibles = sorted([str(s) for s in df_res_main["SALA"].unique() if str(s) != "SIN SALA"])
-        sala_sel = st.selectbox("Seleccione el espacio físico a auditar:", salas_disponibles)
+        # El selector de aula se acopla dinámicamente si hay filtros de salas pre-seleccionados
+        aulas_disponibles = filtro_sala if filtro_sala else sorted([str(s) for s in plan["malla"]["SALA"].unique() if str(s) != "SIN SALA"])
+        sala_sel = st.selectbox("Seleccione el espacio físico a auditar:", aulas_disponibles)
         
-        df_sala_filtrado = df_res_main[df_res_main["SALA"] == sala_sel] if sala_sel else pd.DataFrame()
+        df_sala_filtrado = plan["malla"][plan["malla"]["SALA"] == sala_sel] if sala_sel else pd.DataFrame()
         
         if not df_sala_filtrado.empty:
-            # Extractor dinámico robusto para evitar KeyErrors accidentales
             if "NOMBRE SECCIÓN" in df_sala_filtrado.columns: col_texto = "NOMBRE SECCIÓN"
             elif "CARRERA" in df_sala_filtrado.columns: col_texto = "CARRERA"
             else: col_texto = "SALA"
@@ -124,7 +156,7 @@ if st.session_state["planificacion"] is not None:
             st.markdown("---")
             st.markdown("##### Desglose Detallado de Secciones Afectadas")
             
-            df_sin_sala = df_res_main[df_res_main["ESTADO"] == "SIN SALA"]
+            df_sin_sala = plan["malla"][plan["malla"]["ESTADO"] == "SIN SALA"]
             cols_utiles = [c for c in ["CARRERA", "NOMBRE SECCIÓN", "CUPOS", "DIA", "HORARIO", "MOTIVO_RECHAZO"] if c in df_sin_sala.columns]
             st.dataframe(df_sin_sala[cols_utiles].drop_duplicates(), use_container_width=True, hide_index=True)
         else:
@@ -132,17 +164,17 @@ if st.session_state["planificacion"] is not None:
 
     with tab_exportar:
         st.markdown("##### Generar Paquete de Descarga Oficial")
+        st.caption("Nota: El reporte de la malla se exportará aplicando los filtros de segmentación activos actualmente.")
         excel_buffer = io.BytesIO()
         
-        # openpyxl nativo estándar compatible con ambientes Linux de Streamlit Cloud
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df_res_main.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
+            df_visual.to_excel(writer, sheet_name="Malla_Asignacion_Filtrada", index=False)
             plan["salas"].to_excel(writer, sheet_name="Uso_Ocupacion_Salas", index=False)
             
         st.download_button(
             label="💾 Descargar Reporte en Excel (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=f"Reporte_Salas_{id_config}_{tasa_relax}pct.xlsx",
+            file_name=f"Reporte_Filtrado_{id_config}_{tasa_relax}pct.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
