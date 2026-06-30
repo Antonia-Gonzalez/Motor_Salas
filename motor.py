@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import re
+import copy
 
 DOCT_ONLY_POSTGRADO = ["DOCT", "DOCT II"]
 KIN_EXCLUSIVE_ROOMS = ["UDS 201", "SIM KINE 2"]
@@ -121,7 +122,29 @@ def ejecutar_asignacion_escenario(df_cursos, lista_salas_origen, relax_level=90,
         s["SALA_ID"] = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
         dict_infra_lookup[str(s["SALA"]).strip().upper()] = s
 
-    df_origen = df_cursos.copy()
+# ==========================================================
+# Inicialización de la ocupación heredada
+# ==========================================================    
+    ocupacion = copy.deepcopy(ocupacion_previa) if ocupacion_previa else {}
+
+    df_origen = df_cursos.copy() 
+
+    # ==========================================================
+    # Eliminar cursos que ya fueron asignados anteriormente
+    # ==========================================================
+
+    ocupados = set()
+    
+    for lista in ocupacion.values():
+        if isinstance(lista, list):
+            for x in lista:
+                ocupados.add(str(x["IDENTIFICADOR"]))
+    
+    if "NRC" in df_origen.columns:
+        df_origen = df_origen[
+            ~df_origen["NRC"].astype(str).isin(ocupados)
+        ].copy()
+
     
     # Homologación y conversión segura de las columnas de fecha del Excel
     col_inicio = "FECHA INICIO" if "FECHA INICIO" in df_origen.columns else ("FECHA_INICIO" if "FECHA_INICIO" in df_origen.columns else None)
