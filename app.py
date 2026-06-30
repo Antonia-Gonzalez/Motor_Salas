@@ -65,7 +65,7 @@ def reconstruir_escenario_completo():
 # CONFIGURACIÓN Y PARÁMETROS INTERACTIVOS (SIDEBAR)
 # =========================================================
 st.sidebar.header("⚙️ Parámetros de la Asignación")
-id_config = st.sidebar.text_input("Identificador de esta Tanda", value="TANDA-A")
+id_config = st.sidebar.text_input("Identificador de la corrida", value="TANDA-A")
 tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
 
 # 📌 NUEVA MÉTRICA: Filtro de Eficiencia Mínima de Ocupación de Asignación
@@ -99,7 +99,7 @@ salas_prefiltradas = salas_seleccionadas_base
 # 🔍 FILTROS PERSISTENTES ULTRA-VELOCES ("SELECCIONAR TODO")
 # =========================================================
 st.sidebar.markdown("---")
-st.sidebar.header("Filtros de Segmentación")
+st.sidebar.header("Filtros de asignación")
 
 if archivo_mem:
     try:
@@ -148,7 +148,7 @@ if archivo_mem:
             if not all_salas and f_sala: df_infra_filtrada = df_infra_filtrada[df_infra_filtrada["SALA"].isin(f_sala)]
             
             salas_prefiltradas = df_infra_filtrada.to_dict("records")
-            st.info(f"📊 **Bloque activo prefiltrado:** {len(df_cursos_prefiltrados)} registros listos para inyección.")
+            st.info(f"📊 **Bloque activo prefiltrado:** {len(df_cursos_prefiltrados)} registros listos para la asignación.")
     except Exception as e:
         st.error(f"Error optimizando filtros: {e}")
 else:
@@ -161,8 +161,8 @@ else:
 # 🚀 INYECCIÓN AL ESCENARIO INCREMENTAL
 # =========================================================
 if archivo_mem and not df_cursos_prefiltrados.empty:
-    st.markdown("### ⚙️ 2. Procesar Núcleo de Optimización")
-    if st.button("🚀 Confirmar e Inyectar Tanda al Escenario"):
+    st.markdown("### ⚙️ 2. Procesar condiciones")
+    if st.button("🚀 Confirmar e inciar asignación"):
         if any(r["id"] == id_config for r in esc_state["corridas_historicas"]):
             st.error(f"El ID '{id_config}' ya existe en el escenario.")
         else:
@@ -179,7 +179,7 @@ if archivo_mem and not df_cursos_prefiltrados.empty:
 
 if esc_state["corridas_historicas"]:
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🗂️ Capas del Escenario")
+    st.sidebar.subheader("🗂️Escenarios")
     for idx, run in enumerate(esc_state["corridas_historicas"]):
         col_run_name, col_run_del = st.sidebar.columns([3, 1])
         col_run_name.caption(f"**{run['id']}** ({len(run['df_cursos'])} curs. | {run.get('min_eficiencia',0)}% ef.)")
