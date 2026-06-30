@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import io
@@ -49,36 +48,23 @@ def reconstruir_escenario_completo():
         mallas_acumuladas.append(res_run["malla"])
     
     esc_state["ocupacion_consolidada"] = nueva_ocupacion
-    esc_state["malla_consolidada"] = pd.concat(mallas_acumuladas, ignore_index=True) if mallas_acumuladas else pd.DataFrame()
+    df_temp = pd.concat(mallas_acumuladas, ignore_index=True) if mallas_acumuladas else pd.DataFrame()
     
-    # Regenerar datos de infraestructura con fechas originales para cálculo dinámico
-    df_malla_temp = esc_state["malla_consolidada"]
-    col_inicio = next(
-        (
-            c
-            for c in ["FECHA INICIO", "FECHA_INICIO"]
-            if c in df_malla_temp.columns
-        ),
-        None,
-    )
-
-    col_fin = next(
-        (
-            c
-            for c in ["FECHA FIN", "FECHA_FIN"]
-            if c in df_malla_temp.columns
-        ),
-        None,
-    )
+    # --- CORRECCIÓN CRÍTICA: Homologación y Parseo Seguro de Fechas ---
+    if not df_temp.empty:
+        col_inicio = next((c for c in ["FECHA INICIO", "FECHA_INICIO"] if c in df_temp.columns), None)
+        col_fin = next((c for c in ["FECHA FIN", "FECHA_FIN"] if c in df_temp.columns), None)
+        
+        if col_inicio and col_fin:
+            df_temp["_F_INI_INTERNAL"] = pd.to_datetime(df_temp[col_inicio], errors='coerce')
+            df_temp["_F_FIN_INTERNAL"] = pd.to_datetime(df_temp[col_fin], errors='coerce')
+        else:
+            df_temp["_F_INI_INTERNAL"] = pd.NaT
+            df_temp["_F_FIN_INTERNAL"] = pd.NaT
     
-    if col_inicio and not df_malla_temp.empty:
-        df_malla_temp["_F_INI_INTERNAL"] = pd.to_datetime(df_malla_temp[col_inicio], errors='coerce')
-        df_malla_temp["_F_FIN_INTERNAL"] = pd.to_datetime(df_malla_temp[col_fin], errors='coerce')
-    else:
-        df_malla_temp["_F_INI_INTERNAL"] = pd.NaT
-        df_malla_temp["_F_FIN_INTERNAL"] = pd.NaT
+    esc_state["malla_consolidada"] = df_temp
 
-    df_sin = df_malla_temp[df_malla_temp["ESTADO"] == "SIN SALA"] if ("ESTADO" in df_malla_temp.columns and not df_malla_temp.empty) else pd.DataFrame()
+    df_sin = df_temp[df_temp["ESTADO"] == "SIN SALA"] if ("ESTADO" in df_temp.columns and not df_temp.empty) else pd.DataFrame()
     esc_state["rechazos_consolidados"] = df_sin.groupby("MATERIA").size().reset_index(name="sin_sala") if (not df_sin.empty and "MATERIA" in df_sin.columns) else pd.DataFrame(columns=["MATERIA", "sin_sala"])
 
 # =========================================================
@@ -87,7 +73,6 @@ def reconstruir_escenario_completo():
 st.sidebar.header("⚙️ Parámetros de la Asignación")
 id_config = st.sidebar.text_input("Identificador de la corrida", value="TANDA-A")
 
-# Modificación: Explicitar los niveles incluyendo la tecnología y formato libre al 85%
 st.sidebar.markdown("**Nivel de Relajación y Criterios:**")
 tasa_relax = st.sidebar.select_slider(
     "Seleccione el comportamiento del motor:",
@@ -103,7 +88,6 @@ tasa_relax = st.sidebar.select_slider(
 )
 
 min_eficiencia = st.sidebar.slider("Eficiencia Mínima de Ocupación Sala (%)", min_value=0, max_value=100, value=20, step=5)
-st.sidebar.caption("💡 Evita que cursos pequeños utilicen aulas gigantescas.")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ruta_infra = os.path.join(BASE_DIR, "infraestructura_constante.xlsx")
@@ -209,7 +193,7 @@ if archivo_mem and not df_cursos_prefiltrados.empty:
 if esc_state["corridas_historicas"]:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🗂️ Escenarios")
-    for idx, run in enumerate(esc_state["corridas_historicas"]):
+    for idx, run in enumerate(list(esc_state["corridas_historicas"])):
         col_run_name, col_run_del = st.sidebar.columns([3, 1])
         col_run_name.caption(f"**{run['id']}** ({len(run['df_cursos'])} curs. | {run['relax']}% rel.)")
         if col_run_del.button("🗑️", key=f"del_{run['id']}_{idx}"):
@@ -225,33 +209,17 @@ if not esc_state["malla_consolidada"].empty:
     
     df_malla_completa = esc_state["malla_consolidada"].copy()
 
-    # =========================================================
-    # Homologación de nombres de columnas de fechas
-    # =========================================================
-    if "FECHA INICIO" in df_malla_completa.columns:
-        COL_FECHA_INICIO = "FECHA INICIO"
-    elif "FECHA_INICIO" in df_malla_completa.columns:
-        COL_FECHA_INICIO = "FECHA_INICIO"
-    else:
-        COL_FECHA_INICIO = None
-
-    if "FECHA FIN" in df_malla_completa.columns:
-        COL_FECHA_FIN = "FECHA FIN"
-    elif "FECHA_FIN" in df_malla_completa.columns:
-        COL_FECHA_FIN = "FECHA_FIN"
-    else:
-        COL_FECHA_FIN = None
+    COL_FECHA_INICIO = next((c for c in ["FECHA INICIO", "FECHA_INICIO"] if c in df_malla_completa.columns), None)
+    COL_FECHA_FIN = next((c for c in ["FECHA FIN", "FECHA_FIN"] if c in df_malla_completa.columns), None)
     
-    # 📆 CONTROL GLOBAL DE VENTANA DE TIEMPO DE CONSULTA
     st.markdown("#### 📆 Seleccionar Ventana de Tiempo para Auditoría en Pantalla")
-    col_v1, col_v2, col_v3 = st.columns(3)
+    col_v1, col_v2 = st.columns([1, 2])
     
     tipo_ventana = col_v1.selectbox(
         "Ver utilización por:",
         options=["Periodo Completo", "Por Mes", "Por Semana Específica", "Por Día Específico"]
     )
     
-    # Extracción de límites de fechas del set de datos reales
     min_date = df_malla_completa["_F_INI_INTERNAL"].min()
     max_date = df_malla_completa["_F_FIN_INTERNAL"].max()
     
@@ -259,52 +227,36 @@ if not esc_state["malla_consolidada"].empty:
     if pd.isna(max_date): max_date = pd.Timestamp("2026-12-31")
     
     df_malla_filtrada_tiempo = df_malla_completa.copy()
-    max_bloques_disponibles_en_ventana = 50 # Base teórica semanal estándar
+    max_bloques_disponibles_en_ventana = 50 
 
     if tipo_ventana == "Por Mes":
+        MESES = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+                 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
 
-        MESES = {
-            1: "Enero",
-            2: "Febrero",
-            3: "Marzo",
-            4: "Abril",
-            5: "Mayo",
-            6: "Junio",
-            7: "Julio",
-            8: "Agosto",
-            9: "Septiembre",
-            10: "Octubre",
-            11: "Noviembre",
-            12: "Diciembre"
-        }
-
-    # Obtener automáticamente todos los meses presentes en la programación
-        meses_disponibles = sorted(
-            pd.concat([
-                df_malla_completa["_F_INI_INTERNAL"].dt.month,
-                df_malla_completa["_F_FIN_INTERNAL"].dt.month
-            ]).dropna().astype(int).unique()
-        )
-    
+        # Generar lista de meses válidos basados en el rango real del DataFrame
+        meses_disponibles = sorted(list(set(range(int(min_date.month), int(max_date.month) + 1))))
+        
         mes_sel = col_v2.selectbox(
             "Seleccione Mes:",
             options=meses_disponibles,
             format_func=lambda x: MESES[x]
         )
-    
-        # Cursos vigentes durante el mes seleccionado
+        
+        # --- CORRECCIÓN: Filtro de traslape correcto por rango de fecha ---
+        primer_dia_mes = pd.Timestamp(year=2026, month=mes_sel, day=1)
+        ultimo_dia_mes = primer_dia_mes + pd.offsets.MonthEnd(0)
+        
         df_malla_filtrada_tiempo = df_malla_completa[
-            (df_malla_completa["_F_INI_INTERNAL"].dt.month <= mes_sel) &
-            (df_malla_completa["_F_FIN_INTERNAL"].dt.month >= mes_sel)
+            (df_malla_completa["_F_INI_INTERNAL"] <= ultimo_dia_mes) &
+            (df_malla_completa["_F_FIN_INTERNAL"] >= primer_dia_mes)
         ]
-    
-        # Número de semanas reales del mes
-        semanas_mes = 4 if mes_sel != 2 else 4
-        max_bloques_disponibles_en_ventana = 50 * semanas_mes
+        max_bloques_disponibles_en_ventana = 50 * 4.35
         
     elif tipo_ventana == "Por Semana Específica":
         fecha_sem = col_v2.date_input("Seleccione un día de la semana a consultar:", value=min_date.date())
         ts_sem = pd.Timestamp(fecha_sem)
+        
+        # Filtrar cursos cuya vigencia cruce la semana seleccionada
         df_malla_filtrada_tiempo = df_malla_completa[
             (df_malla_completa["_F_INI_INTERNAL"] <= ts_sem + pd.Timedelta(days=6)) & 
             (df_malla_completa["_F_FIN_INTERNAL"] >= ts_sem)
@@ -321,16 +273,15 @@ if not esc_state["malla_consolidada"].empty:
         df_malla_filtrada_tiempo = df_malla_completa[
             (df_malla_completa["_F_INI_INTERNAL"] <= ts_dia) & 
             (df_malla_completa["_F_FIN_INTERNAL"] >= ts_dia) &
-            (df_malla_completa["DIA"] == dia_traducido)
+            (df_malla_completa["DIA"].astype(str).str.upper() == dia_traducido)
         ]
         max_bloques_disponibles_en_ventana = 10 
 
-    # Recálculo de métricas dinámicas basadas en la ventana temporal seleccionada
-    ult_salas = esc_state["corridas_historicas"][-1]["salas_infra"]
+    # Recálculo de métricas dinámicas
+    ult_salas = esc_state["corridas_historicas"][-1]["salas_infra"] if esc_state["corridas_historicas"] else []
     metricas_infra_dinamicas = []
     
     for s in ult_salas:
-        s_id = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
         if not df_malla_filtrada_tiempo.empty:
             occ = len(df_malla_filtrada_tiempo[(df_malla_filtrada_tiempo["SALA"] == s["SALA"]) & (df_malla_filtrada_tiempo["EDIFICIO"] == s["EDIFICIO"])])
         else:
@@ -341,7 +292,7 @@ if not esc_state["malla_consolidada"].empty:
             "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"], "CAPACIDAD": s["CAPACIDAD"], 
             "BLOQUES_OCUPADOS": occ, "% Utilización": min(100.0, utilizacion_pct)
         })
-    df_salas_dinamicas = pd.DataFrame(metricas_infra_dinamicas)
+    df_salas_dinamicas = pd.DataFrame(metricas_infra_dinamicas) if metricas_infra_dinamicas else pd.DataFrame()
 
     # Indicadores Clave en Pantalla
     tot_c = len(df_malla_completa)
@@ -366,34 +317,21 @@ if not esc_state["malla_consolidada"].empty:
 
     with tab_calendario:
         st.subheader("Cronograma de Espacios con Vigencia de Fechas")
-        aulas_ocupadas = sorted([str(s) for s in df_malla_filtrada_tiempo["SALA"].unique() if str(s) != "SIN SALA"])
+        aulas_ocupadas = sorted([str(s) for s in df_malla_filtrada_tiempo["SALA"].unique() if str(s) != "SIN SALA" and pd.notna(s)])
         
         if aulas_ocupadas:
             sala_sel = st.selectbox("Seleccione el espacio físico a auditar:", aulas_ocupadas)
-            df_sala_filtrado = df_malla_filtrada_tiempo[df_malla_filtrada_tiempo["SALA"] == sala_sel]
+            df_sala_filtrado = df_malla_filtrada_tiempo[df_malla_filtrada_tiempo["SALA"] == sala_sel].copy()
             
             if not df_sala_filtrado.empty:
-                # Modificación: Visualizar explícitamente las fechas y vigencia del curso en el bloque
-                if COL_FECHA_INICIO and COL_FECHA_FIN:
-
-                    fecha_ini = df_sala_filtrado[COL_FECHA_INICIO].fillna("").astype(str)
-                    fecha_fin = df_sala_filtrado[COL_FECHA_FIN].fillna("").astype(str)
-
-                else:
-
-                    fecha_ini = ""
-                    fecha_fin = ""
-
+                # Formatear fechas explícitas para evitar errores visuales
+                f_ini_str = df_sala_filtrado["_F_INI_INTERNAL"].dt.strftime("%d/%m") if "_F_INI_INTERNAL" in df_sala_filtrado.columns else ""
+                f_fin_str = df_sala_filtrado["_F_FIN_INTERNAL"].dt.strftime("%d/%m") if "_F_FIN_INTERNAL" in df_sala_filtrado.columns else ""
+                
                 df_sala_filtrado["DISPLAY"] = (
-                    df_sala_filtrado["MATERIA"].astype(str)
-                    + " ["
-                    + fecha_ini
-                    + " a "
-                    + fecha_fin
-                    + "]"
-                    + " (Ef: "
-                    + df_sala_filtrado["EFICIENCIA_%"].astype(str)
-                    + "%)"
+                    df_sala_filtrado["MATERIA"].astype(str) + 
+                    " [" + f_ini_str + " al " + f_fin_str + "]" +
+                    " (Ef: " + df_sala_filtrado["EFICIENCIA_%"].astype(str) + "%)"
                 )
                 try:
                     df_pivot = pd.pivot_table(
@@ -414,121 +352,59 @@ if not esc_state["malla_consolidada"].empty:
             m1, m2 = st.columns(2)
             m1.metric("Promedio de Utilización Campus en esta Ventana", f"{round(df_salas_dinamicas['% Utilización'].mean(), 1)}%")
             max_row = df_salas_dinamicas.loc[df_salas_dinamicas["BLOQUES_OCUPADOS"].idxmax()]
-            m2.metric("Aula Más Solicitada (Bloques contados)", f"{max_row['EDIFICIO']}-{max_row['SALA']}", f"{max_row['% Utilización']}% Uso")
+            m2.metric("Aula Más Solicitada", f"{max_row['EDIFICIO']}-{max_row['SALA']}", f"{max_row['% Utilización']}% Uso")
             
             st.bar_chart(df_salas_dinamicas, x="SALA", y="% Utilización", color="EDIFICIO", use_container_width=True)
             st.dataframe(df_salas_dinamicas, use_container_width=True, hide_index=True)
 
     with tab_heatmap:
         st.subheader("🔥 Mapa de Calor de Ocupación por Edificio y Horario")
-        st.caption("Visualiza los puntos críticos y niveles de saturación de la infraestructura según la ventana temporal activa.")
-        
         if not df_malla_filtrada_tiempo.empty and "EDIFICIO" in df_malla_filtrada_tiempo.columns:
-            df_heat_raw = df_malla_filtrada_tiempo[
-                df_malla_filtrada_tiempo["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"]) & 
-                (df_malla_filtrada_tiempo["EDIFICIO"] != "N/A")
-            ]
+            df_heat_raw = df_malla_filtrada_tiempo[df_malla_filtrada_tiempo["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"]) & (df_malla_filtrada_tiempo["EDIFICIO"] != "N/A")]
             
             if not df_heat_raw.empty:
-                df_pivot_heat = pd.crosstab(
-                    index=df_heat_raw["HORARIO"],
-                    columns=df_heat_raw["EDIFICIO"]
-                )
-                df_pivot_heat = pd.crosstab(
-                    index=df_heat_raw["HORARIO"],
-                    columns=df_heat_raw["EDIFICIO"]
-                )
-
-                fig = px.imshow(
-                    df_pivot_heat,
-                    color_continuous_scale="Reds",
-                    aspect="auto",
-                    labels=dict(
-                        x="Edificio",
-                        y="Horario",
-                        color="Cursos"
-                    )
-                )
-
+                df_pivot_heat = pd.crosstab(index=df_heat_raw["HORARIO"], columns=df_heat_raw["EDIFICIO"])
+                fig = px.imshow(df_pivot_heat, color_continuous_scale="Reds", aspect="auto", labels=dict(x="Edificio", y="Horario", color="Cursos"))
                 st.plotly_chart(fig, use_container_width=True)
-
-                st.caption("💡 Tonos más oscuros representan mayor concentración de secciones paralelas dictándose en ese edificio.")
             else:
-                st.info("Sin datos suficientes en esta ventana temporal para dibujar el mapa de calor.")
-        else:
-            st.info("Cargue datos de programación para activar el mapa térmico.")
+                st.info("Sin asignaciones activas en este periodo de tiempo.")
 
     with tab_criticos:
         df_sin_sala = df_malla_completa[df_malla_completa["ESTADO"] == "SIN SALA"].copy()
         if not df_sin_sala.empty:
             c_izq, c_der = st.columns([2, 1])
             with c_izq:
-                # Clonamos y formateamos las fechas internas de forma segura para la interfaz
-                if "_F_INI_INTERNAL" in df_sin_sala.columns:
-                    df_sin_sala["INICIO"] = (
-                        df_sin_sala["_F_INI_INTERNAL"]
-                        .dt.strftime("%Y-%m-%d")
-                        .fillna("Sin fecha")
-                    )
-                else:
-                    df_sin_sala["INICIO"] = "Sin fecha"
-
-                if "_F_FIN_INTERNAL" in df_sin_sala.columns:
-                    df_sin_sala["FIN"] = (
-                        df_sin_sala["_F_FIN_INTERNAL"]
-                            .dt.strftime("%Y-%m-%d")
-                            .fillna("Sin fecha")
-                    )
-                else:
-                    df_sin_sala["FIN"] = "Sin fecha"
-                
-                # Definimos las columnas que garantizamos que existen en el dataframe procesado
-                columnas_mostrar = ["MATERIA", "CUPOS", "INICIO", "FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"]
-                # Filtramos solo las que existan realmente para evitar cualquier otro KeyError imprevisto
-                columnas_seguras = [col for col in columnas_mostrar if col in df_sin_sala.columns]
-                
+                df_sin_sala["INICIO"] = df_sin_sala["_F_INI_INTERNAL"].dt.strftime("%Y-%m-%d").fillna("Sin fecha")
+                df_sin_sala["FIN"] = df_sin_sala["_F_FIN_INTERNAL"].dt.strftime("%Y-%m-%d").fillna("Sin fecha")
+                columnas_seguras = [col for col in ["MATERIA", "CUPOS", "INICIO", "FIN", "DIA", "HORARIO", "MOTIVO_RECHAZO"] if col in df_sin_sala.columns]
                 st.dataframe(df_sin_sala[columnas_seguras], use_container_width=True, hide_index=True)
             with c_der:
-                st.markdown("**Frenos de Asignación acumulados por Materia**")
+                st.markdown("**Frenos de Asignación acumulados**")
                 st.dataframe(esc_state["rechazos_consolidados"], use_container_width=True, hide_index=True)
         else:
-            st.success("🎉 ¡Excelente! Cero rechazos históricos reportados en el escenario.")
+            st.success("🎉 ¡Excelente! Cero rechazos históricos.")
 
     with tab_exportar:
         st.subheader("Auditoría de Configuración e Historial")
-        
         df_exportable = df_malla_completa.copy()
-        columnas_renombrar = {"CAPACIDAD_SALA": "CAPACIDAD DE LA SALA", "EFICIENCIA_%": "% OCUPACIÓN SALA"}
-        df_exportable = df_exportable.rename(columns=columnas_renombrar)
-        
-        columnas_control = ["ESTADO", "MOTIVO_RECHAZO", "CORRIDA_ID", "_F_INI_INTERNAL", "_F_FIN_INTERNAL"]
-        columnas_ordenadas = [c for c in df_exportable.columns if c not in columnas_control]
+        df_exportable = df_exportable.rename(columns={"CAPACIDAD_SALA": "CAPACIDAD DE LA SALA", "EFICIENCIA_%": "% OCUPACIÓN SALA"})
+        columnas_ordenadas = [c for c in df_exportable.columns if c not in ["ESTADO", "MOTIVO_RECHAZO", "CORRIDA_ID", "_F_INI_INTERNAL", "_F_FIN_INTERNAL"]]
         df_exportable = df_exportable[columnas_ordenadas]
 
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             df_exportable.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
-            df_salas_dinamicas.to_excel(writer, sheet_name="Uso_Salas_Analitico", index=False)
+            if not df_salas_dinamicas.empty:
+                df_salas_dinamicas.to_excel(writer, sheet_name="Uso_Salas_Analitico", index=False)
             esc_state["rechazos_consolidados"].to_excel(writer, sheet_name="Rechazos_Por_Materia", index=False)
-            
-            log_corridas = []
-            for r in esc_state["corridas_historicas"]:
-                log_corridas.append({
-                    "ID Bloque/Tanda": r["id"], 
-                    "Configuración Relax": f"{r['relax']}%", 
-                    "Filtro Eficiencia Mínima": f"{r.get('min_eficiencia',0)}%",
-                    "Secciones Inyectadas": len(r["df_cursos"])
-                })
-            pd.DataFrame(log_corridas).to_excel(writer, sheet_name="Historial_Pipeline_Capas", index=False)
             
         st.download_button(
             label="📥 Descargar Libro de Planificación Certificado (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=f"Reporte_Consolidado_UAndes.xlsx",
+            file_name="Reporte_Consolidado_UAndes.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# Botón estructural para resetear la memoria de la app
 if st.sidebar.button("Limpiar Todo y Reiniciar Sistema"):
     if "df_total_cursos_cache" in st.session_state:
         del st.session_state["df_total_cursos_cache"]
