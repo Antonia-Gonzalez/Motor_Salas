@@ -68,7 +68,6 @@ st.sidebar.header("⚙️ Parámetros de la Asignación")
 id_config = st.sidebar.text_input("Identificador de la corrida", value="TANDA-A")
 tasa_relax = st.sidebar.slider("Nivel de Relajación de Reglas (%)", min_value=60, max_value=100, value=90, step=5)
 
-# 📌 NUEVA MÉTRICA: Filtro de Eficiencia Mínima de Ocupación de Asignación
 min_eficiencia = st.sidebar.slider("Eficiencia Mínima de Ocupación Sala (%)", min_value=0, max_value=100, value=20, step=5)
 st.sidebar.caption("💡 Evita que cursos pequeños (ej: 10 alumnos) utilicen auditorios gigantescos (ej: capacidad 80).")
 
@@ -96,14 +95,13 @@ df_cursos_prefiltrados = pd.DataFrame()
 salas_prefiltradas = salas_seleccionadas_base
 
 # =========================================================
-# 🔍 FILTROS PERSISTENTES ULTRA-VELOCES ("SELECCIONAR TODO")
+# 🔍 FILTROS PERSISTENTES ULTRA-VELOCES
 # =========================================================
 st.sidebar.markdown("---")
 st.sidebar.header("Filtros de asignación")
 
 if archivo_mem:
     try:
-        # Optimización: Se lee el excel una sola vez y se guarda en caché de sesión
         if "df_total_cursos_cache" not in st.session_state:
             excel_inspeccion = pd.ExcelFile(archivo_mem)
             dfs_hojas = []
@@ -124,7 +122,6 @@ if archivo_mem:
             edificios_disponibles = sorted(df_infra_raw["EDIFICIO"].dropna().unique()) if not df_infra_raw.empty else []
             salas_disponibles = sorted(df_infra_raw["SALA"].dropna().unique()) if not df_infra_raw.empty else []
             
-            # 📌 OPTIMIZACIÓN: Checkbox de Selección Total (Inmunidad a retrasos)
             all_materias = st.sidebar.checkbox("Seleccionar todas las Materias", value=True)
             f_mat = [] if all_materias else st.sidebar.multiselect("Filtrar por Materia:", materias_disponibles, default=esc_state["filtros_ui"]["materia"])
             
@@ -138,7 +135,6 @@ if archivo_mem:
             esc_state["filtros_ui"]["edificio"] = f_edif
             esc_state["filtros_ui"]["sala"] = f_sala
             
-            # Procesamiento de vectores indexados vectorialmente (Muy rápido)
             df_cursos_prefiltrados = df_total_cursos
             if not all_materias and f_mat: 
                 df_cursos_prefiltrados = df_cursos_prefiltrados[df_cursos_prefiltrados["MATERIA"].isin(f_mat)]
@@ -152,7 +148,6 @@ if archivo_mem:
     except Exception as e:
         st.error(f"Error optimizando filtros: {e}")
 else:
-    # Si se remueve el archivo, limpiamos el caché inmediatamente
     if "df_total_cursos_cache" in st.session_state:
         del st.session_state["df_total_cursos_cache"]
     st.sidebar.info("ℹ️ Sube un archivo para inicializar los universos de control.")
@@ -189,7 +184,7 @@ if esc_state["corridas_historicas"]:
             st.rerun()
 
 # =========================================================
-# Dashboard del Escenario (Métricas de Eficiencia Añadidas)
+# Dashboard del Escenario
 # =========================================================
 if not esc_state["malla_consolidada"].empty:
     st.markdown("### 📊 3. Dashboard del Escenario")
@@ -200,7 +195,6 @@ if not esc_state["malla_consolidada"].empty:
     tot_c = len(df_malla)
     tot_a = sum(df_malla["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])) if "ESTADO" in df_malla.columns else 0
     
-    # Cálculo de la Eficiencia Promedio Real de los cursos asignados
     df_asignados_validos = df_malla[df_malla["ESTADO"].isin(["ASIGNADO", "ASIGNADO_MANUAL"])]
     eficiencia_promedio = round(df_asignados_validos["EFICIENCIA_%"].mean(), 1) if not df_asignados_validos.empty else 0.0
 
@@ -262,9 +256,26 @@ if not esc_state["malla_consolidada"].empty:
 
     with tab_exportar:
         st.subheader("Auditoría de Configuración e Historial")
+        
+        # 📌 PREPARACIÓN Y CORRECCIÓN DE LA HOJA PRINCIPAL
+        df_exportable = df_malla.copy()
+        
+        # Renombrar columnas internas a las solicitadas para el informe formal
+        columnas_renombrar = {
+            "CAPACIDAD_SALA": "CAPACIDAD DE LA SALA",
+            "EFICIENCIA_%": "% OCUPACIÓN SALA"
+        }
+        df_exportable = df_exportable.rename(columns=columnas_renombrar)
+        
+        # Reordenamiento estético: Desplazar columnas de control operacional al final
+        columnas_control = ["ESTADO", "MOTIVO_RECHAZO", "CORRIDA_ID"]
+        columnas_ordenadas = [c for c in df_exportable.columns if c not in columnas_control]
+        columnas_ordenadas += [c for c in columnas_control if c in df_exportable.columns]
+        df_exportable = df_exportable[columnas_ordenadas]
+
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            df_malla.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
+            df_exportable.to_excel(writer, sheet_name="Malla_Asignacion", index=False)
             df_salas.to_excel(writer, sheet_name="Uso_Salas_Analitico", index=False)
             df_rechazos.to_excel(writer, sheet_name="Rechazos_Por_Materia", index=False)
             
