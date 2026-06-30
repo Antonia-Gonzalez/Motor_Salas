@@ -132,8 +132,11 @@ def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_sala
     
     # 📌 FILTRO ESTRICTO TEMPRANO: Excluir todo lo que no pertenezca a los tipos autorizados
     if "TIPO" in df_origen.columns:
-        # Convertimos a string, pasamos a mayúsculas y verificamos si contiene alguna de las palabras clave permitidas
-        mascara_permitidos = df_origen["TIPO"].astype(str).str.upper().apply(
+        # Rellenamos celdas vacías con "DESCONOCIDO" para que sean strings válidos y no floten como NaN
+        df_origen["TIPO"] = df_origen["TIPO"].fillna("DESCONOCIDO").astype(str)
+        
+        # Ahora pasamos a mayúsculas y filtramos de forma segura
+        mascara_permitidos = df_origen["TIPO"].str.upper().apply(
             lambda x: any(t in x for t in TIPOS_PERMITIDOS)
         )
         df_origen = df_origen[mascara_permitidos].reset_index(drop=True)
