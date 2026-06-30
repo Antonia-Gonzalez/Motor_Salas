@@ -31,11 +31,11 @@ def edificio_preferido(materia):
     materia = str(materia).upper()
 
     if any(x in materia for x in INGENIERIAS):
-        return ["ING", "CIEN"]
+        return ["ING"]
     if any(x in materia for x in ADMIN):
         return ["CIEN", "REL", "BIB"]
 
-    return ["HUM", "CEN", "REL", "CIEN"]
+    return ["HUM", "CEN", "REL", "CIEN", "BIB"]
 
 # =========================================================
 # CAPA 1: VALIDACIONES DURAS (HARD CONSTRAINTS)
@@ -59,15 +59,14 @@ def sala_valida(curso, sala):
     return True
 
 def colision(dia, horario, sala_id, ocupacion):
-    # Coordenada espaciotemporal exacta en el mapa de bits del sistema
     return (sala_id, dia, horario) in ocupacion
 
 # =========================================================
 # CAPA 2: SCORING (SOFT CONSTRAINTS + RELAJACIÓN)
 # =========================================================
 def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
-    tipo = str(curso.get("TIPO_REUNION", ""))
-    materia = curso.get("MATERIA", "")
+    tipo = str(curso.get("TIPO", ""))
+    materia = str(curso.get("MATERIA", ""))
     origen = curso.get("ORIGEN_BASE")
 
     score = 0
@@ -105,71 +104,71 @@ def score_sala(curso, sala, ocup_sala, ocup_edif, relax):
 # =========================================================
 # CAPA 3: ENGINE PRINCIPAL DE ASIGNACIÓN
 # =========================================================
-def ejecutar_asignacion_escenario(
-        archivo_cursos_excel,
-        escenario_id,
-        lista_salas,
-        relax_level=90):
+def ejecutar_asignacion_escenario(archivo_cursos_excel, escenario_id, lista_salas, relax_level=90):
 
-    # Leer el libro una sola vez (más eficiente)
     excel = pd.ExcelFile(archivo_cursos_excel)
 
-    # -------------------------
-    # PREGRADO
-    # -------------------------
     if "BASE PREGRADO" in excel.sheet_names:
         df_pre = pd.read_excel(excel, sheet_name="BASE PREGRADO")
         df_pre["ORIGEN_BASE"] = "PREGRADO"
     else:
         df_pre = pd.DataFrame()
 
-    # -------------------------
-    # POSTGRADO
-    # -------------------------
     if "BASE POSTGRADO" in excel.sheet_names:
         df_post = pd.read_excel(excel, sheet_name="BASE POSTGRADO")
         df_post["ORIGEN_BASE"] = "POSTGRADO"
     else:
         df_post = pd.DataFrame()
 
-    # -------------------------
-    # Validación
-    # -------------------------
     if df_pre.empty and df_post.empty:
-        raise ValueError(
-            "No se encontraron las hojas 'BASE PREGRADO' ni 'BASE POSTGRADO'."
-        )
+        raise ValueError("No se encontraron las hojas 'BASE PREGRADO' ni 'BASE POSTGRADO'.")
 
-    # Unión
-    df_origen = pd.concat(
-        [df_post, df_pre],
-        ignore_index=True
+    df_origen = pd.concat([df_post, df_pre], ignore_index=True)
+    
+    # 📌 ADAPTACIÓN: Ahora la Carrera para los filtros y métricas es la columna 'MATERIA'
+    if "MATERIA" in df_origen.columns:
+        df_origen["CARRERA"] = df_origen["MATERIA"]
+    else:
+        df_origen["CARRERA"] = "DESCONOCIDA"
+
+    # -----------------------------------------------------------------
+    # APALANAMIENTO HORARIO: Transformación matricial a registros lineales
+    # -----------------------------------------------------------------
+    dias_columnas = ["LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"]
+    registros_planos = []
+    
+    for item in df_origen.to_dict("records"):
+        tiene_horarios = False
+        for dia in dias_columnas:
+            val_dia = item.get(dia)
+            if pd.notna(val_dia) and str(val_dia).strip() != "" and "-" in str(val_dia):
+                nuevo_bloque = item.copy()
+                # 📌 Guardamos el día específico y el bloque horario en el registro
+                nuevo_bloque["DIA"] = dia
+                nuevo_bloque["HORARIO"] = str(val_dia).strip()
+                registros_planos.append(nuevo_bloque)
+                tiene_horarios = True
+        
+        if not tiene_horarios:
+            nuevo_bloque = item.copy()
+            nuevo_bloque["DIA"] = "SIN DIA"
+            nuevo_bloque["HORARIO"] = "SIN HORARIO"
+            registros_planos.append(nuevo_bloque)
+
+    df_procesable = pd.DataFrame(registros_planos)
+
+    # Ranking institucional sobre la estructura aplanada
+    df_procesable["_p_origen"] = np.where(df_procesable["ORIGEN_BASE"] == "POSTGRADO", 1, 2)
+    df_procesable["_p_tipo"] = df_procesable.apply(
+        lambda r: prioridad_tipo(r.get("TIPO", ""), r.get("ORIGEN_BASE", "")), axis=1
     )
 
-    # Ranking institucional
-    df_origen["_p_origen"] = np.where(
-        df_origen["ORIGEN_BASE"] == "POSTGRADO",
-        1,
-        2
+    df_procesable = df_procesable.sort_values(
+        by=["_p_origen", "_p_tipo", "CUPOS"], ascending=[True, True, False]
     )
 
-    df_origen["_p_tipo"] = df_origen.apply(
-        lambda r: prioridad_tipo(
-            r["TIPO_REUNION"],
-            r["ORIGEN_BASE"]
-        ),
-        axis=1
-    )
+    cursos = df_procesable.to_dict("records")
 
-    # Orden oficial
-    df_origen = df_origen.sort_values(
-        by=["_p_origen", "_p_tipo", "CUPOS"],
-        ascending=[True, True, False]
-    )
-
-    cursos = df_origen.to_dict("records")
-
-    # Inyección de IDs Unificados Libres de conflictos por strings duplicados
     for s in lista_salas:
         s["SALA_ID"] = f"{s['EDIFICIO']}_{s['SALA']}".replace(" ", "_")
 
@@ -177,45 +176,58 @@ def ejecutar_asignacion_escenario(
     malla = []
     asignados = 0
 
-    # Algoritmo de asignación óptimo de pasada única
     for c in list(cursos):
         mejor_s = None
         mejor_score = 1e9
         cupos_curso = c.get("CUPOS", 0)
+        dia_curso = c.get("DIA")
+        hora_curso = c.get("HORARIO")
+
+        if dia_curso == "SIN DIA" or hora_curso == "SIN HORARIO":
+            malla.append({
+                **c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO_SALA": "N/A",
+                "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": "Falta definición horaria en archivo origen"
+            })
+            continue
 
         for s in lista_salas:
-            # 1. Filtros Duros Iniciales
             if s["CAPACIDAD"] < cupos_curso:
                 continue
             if not sala_valida(c, s):
                 continue
-            if colision(c.get("DIA"), c.get("HORARIO"), s["SALA_ID"], ocupacion):
+            if colision(dia_curso, hora_curso, s["SALA_ID"], ocupacion):
                 continue
 
-            # Conteo dinámico en caliente para balancear la carga física
             occ_sala = sum(1 for k in ocupacion if k[0] == s["SALA_ID"])
             occ_edif = sum(1 for k in ocupacion if k[0].startswith(s["EDIFICIO"]))
 
-            # 2. Evaluación de Aptitud (Score)
             sc = score_sala(c, s, occ_sala, occ_edif, relax_level)
 
             if sc < mejor_score:
                 mejor_score = sc
                 mejor_s = s
 
-        # Registro del estado definitivo
         if mejor_s:
-            ocupacion[(mejor_s["SALA_ID"], c.get("DIA"), c.get("HORARIO"))] = c["ID"]
+            identificador_curso = c.get("NRC", c.get("N°", "N/A"))
+            ocupacion[(mejor_s["SALA_ID"], dia_curso, hora_curso)] = identificador_curso
             asignados += 1
 
             malla.append({
-                **c, "SALA": mejor_s["SALA"], "EDIFICIO": mejor_s["EDIFICIO"],
-                "TIPO_SALA": mejor_s["TIPO_SALA"], "ESTADO": "ASIGNADO", "MOTIVO_RECHAZO": "N/A"
+                **c, 
+                "SALA": mejor_s["SALA"], 
+                "EDIFICIO": mejor_s["EDIFICIO"],
+                "TIPO_SALA": mejor_s["TIPO_SALA"], 
+                "ESTADO": "ASIGNADO", 
+                "MOTIVO_RECHAZO": "N/A"
             })
         else:
             malla.append({
-                **c, "SALA": "SIN SALA", "EDIFICIO": "N/A", "TIPO_SALA": "N/A",
-                "ESTADO": "SIN SALA", "MOTIVO_RECHAZO": "Capacidad insuficiente o colisión de horario insalvable"
+                **c, 
+                "SALA": "SIN SALA", 
+                "EDIFICIO": "N/A", 
+                "TIPO_SALA": "N/A",
+                "ESTADO": "SIN SALA", 
+                "MOTIVO_RECHAZO": "Capacidad insuficiente o colisión de horario insalvable"
             })
 
     df_res = pd.DataFrame(malla)
@@ -229,7 +241,7 @@ def ejecutar_asignacion_escenario(
         metricas.append({
             "SALA": s["SALA"], "EDIFICIO": s["EDIFICIO"],
             "CAPACIDAD": s["CAPACIDAD"], "BLOQUES_OCUPADOS": occ,
-            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, 50 - occ)  # 50 bloques teóricos semanales
+            "HORAS_OCUPADAS": occ, "HORAS_LIBRES": max(0, 50 - occ)
         })
     df_s = pd.DataFrame(metricas)
 
